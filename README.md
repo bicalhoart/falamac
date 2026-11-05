@@ -29,10 +29,12 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 - Fn é opcional: segurar para falar ou alternar a cada toque. Desative o atalho Fn no Typeless e a ação padrão da tecla Globo no macOS antes de usar. A detecção de Fn precisa ser validada no teclado real; o atalho alternativo continua disponível.
 - Para impedir que Fn também alterne o idioma do teclado, use Configuração → Tecla Fn do Mac e escolha **Do Nothing** em **Press 🌐 key to**. A mudança é uma preferência do macOS e continua valendo ao encerrar o FalaMac. Para alternar layouts, use **Control + Espaço** ou o menu de Entrada na barra superior.
 - Até 5 minutos por gravação. Indicador visível durante captura e processamento. Silêncio e gravações muito curtas são descartados antes do envio.
+- A barra de gravação usa fundo escuro translúcido e tem **Cancelar · Esc**. O botão e a tecla **Esc** descartam a captura antes do envio. Esc só é reservado pelo FalaMac enquanto prepara ou grava; fora disso, permanece com a função normal nos outros apps. Depois que o áudio foi enviado para processamento, a barra mostra o andamento e não oferece cancelamento da requisição já iniciada.
 - Se o foco mudar para outro aplicativo ou campo durante o processamento, o FalaMac abre o resultado para você copiar. Campos protegidos são excluídos. Alguns aplicativos não aceitam inserção por acessibilidade; confira sempre o resultado.
 - A inserção usa Acessibilidade para reconhecer o campo e envia um comando de colar após soltar os modificadores do atalho. Isso mantém os eventos de edição esperados por campos em React e Electron. Restaura o conteúdo anterior da área de transferência após um segundo, desde que você não tenha copiado algo novo. O aplicativo de destino não confirma que recebeu o comando de colar.
 - Configuração mostra se a inserção está autorizada pelo macOS. O botão **Testar inserção** dá cinco segundos para clicar num campo de outro app e insere uma frase de teste, sem áudio nem uso das APIs. Se faltar permissão, não encontrar campo ou o foco mudar, informa o motivo.
 - Se a organização falhar, preserva a transcrição original para revisão e cópia. Sem chave OpenRouter, funciona apenas como transcritor.
+- Ao concluir uma gravação, não abre nem ativa a janela. Se não houver campo disponível, deixa o texto no histórico e mostra um aviso breve sem tomar o foco. Use **Copiar último texto** no menu do ícone para copiar sem abrir a janela. Se houver erro, o motivo também fica no texto de ajuda do ícone e no topo da janela, quando você abri-la.
 - O editor mantém perguntas e prompts como texto; não tenta responder a eles nem inventar informações.
 
 ## Espaço e privacidade
@@ -46,6 +48,10 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 - O uso temporário da área de transferência durante a inserção pode ser visto por gerenciadores de clipboard instalados no Mac.
 
 ## Consumo
+
+A aba **Consumo**, também acessível por **Ver consumo** no menu do ícone, consulta `GET https://openrouter.ai/api/v1/key` com a chave já cadastrada. Mostra o consumo informado pelo OpenRouter para o dia, mês e total, além do teto da chave e do restante nesse teto quando disponíveis. As consultas são somente de leitura, sem enviar áudio, transcrições ou histórico. Os dados consultados ficam apenas na memória, com data de atualização, e não são gravados no Git ou em arquivos de histórico. Consulta ao abrir a aba (com intervalo mínimo de um minuto), ou ao clicar em Atualizar consumo.
+
+O consumo da API cobre todos os usos desta chave, inclusive em outros apps, e segue janelas UTC. Não é somado novamente à estimativa local. O restante do teto da chave não é o saldo da conta. A consulta do saldo total exige chave administrativa, que esta versão não solicita; há um botão para abrir o saldo no site do OpenRouter. Para a Groq, usa a estimativa local e oferece acesso ao painel oficial, pois não foi encontrada consulta pública de cobrança com a chave de inferência comum. Valores exibidos em US$; o plano gratuito Groq pode não gerar cobrança, mesmo quando existe estimativa de custo equivalente.
 
 O painel mostra uma estimativa mensal e impede novas gravações perto do teto escolhido, inicialmente US$ 5. A transcrição considera mínimo de 10 segundos a US$ 0,04/h. Para organização, usa `google/gemini-2.5-flash-lite` e o custo informado pelo OpenRouter, ou uma estimativa por tokens quando o custo não estiver disponível. Falhas podem manter uma reserva conservadora de US$ 0,01 para a organização.
 

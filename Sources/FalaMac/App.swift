@@ -16,7 +16,7 @@ enum Main {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSTabViewDelegate {
     private let recorder = Recorder()
     private let keyboard = Keyboard()
     private var history: HistoryStore!
@@ -36,10 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var unsavedText: String?
     private var latestDate: Date?
     private var recordingJob = UUID()
+    private var briefStatusTask: Task<Void, Never>?
+    private var providerUsageTask: Task<Void, Never>?
+    private var lastUsageRefresh: Date?
+    private var lastAccessibilityAllowed = false
 
     private let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     private let tabs = NSTabView()
+    private let consumption = ConsumptionView(frame: .zero)
     private let table = NSTableView()
     private let detail = NSTextView()
     private let search = NSSearchField()
@@ -57,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var visibleEntries: [Entry] = []
     private var hud: NSPanel!
     private let hudLabel = NSTextField(labelWithString: "Gravando…")
+    private lazy var hudCancel = NSButton(title: "Cancelar · Esc", target: self, action: #selector(cancelRecording))
 
     private var days: Int { UserDefaults.standard.object(forKey: "retentionDays") as? Int ?? 30 }
     private var budgetLimit: Double {
@@ -93,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         buildMenu(); buildWindow(); buildHUD()
         applyKeys(Keychain.loadAtLaunch("groq"), Keychain.loadAtLaunch("openrouter"))
         keyboard.toggle = { [weak self] in self?.toggleRecording() }
+        keyboard.cancel = { [weak self] in self?.cancelRecording() }
         keyboard.fnChanged = { [weak self] down in
             guard let self else { return }
             if self.fnSetting == 1 {
@@ -106,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         recorder.onFailure = { [weak self] in self?.cancelRecording(); self?.setMessage("Falha na gravação. O áudio temporário foi descartado.") }
         recorder.level = { [weak self] power in
             let bars = String(repeating: "▰", count: max(1, min(12, Int((power + 55) / 5))))
-            self?.hudLabel.stringValue = "● Gravando  \(bars)    ⌃⌥Espaço para terminar"
+            self?.hudLabel.stringValue = "● Gravando  \(bars)"
         }
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -129,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     func applicationDidBecomeActive(_ notification: Notification) { refreshPermissionStatus() }
 
     func applicationWillTerminate(_ notification: Notification) {
+        briefStatusTask?.cancel(); providerUsageTask?.cancel()
         workTask?.cancel(); recorder.cancel(); keyboard.stop(); cleanupTimer?.invalidate()
         try? history?.clean(days: days)
         if recordingDir != nil { try? cleanRecordings() }
@@ -191,10 +199,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         setState("processing")
         workTask = Task { [weak self] in
             guard let self else { return }
+            var feedback: String?
             defer {
                 do { try FileManager.default.removeItem(at: file) }
                 catch { setMessage("Não foi possível apagar o áudio temporário. Abra a pasta de dados para revisar.") }
                 setState("idle"); refreshHistory()
+                if let feedback { showBriefStatus(feedback) }
             }
             do {
                 let audio = try Data(contentsOf: file)
@@ -231,9 +241,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 let delivery = inserted ? "Texto enviado ao campo ativo. Confira o resultado no aplicativo."
                     : captureFailure?.rawValue ?? "O campo selecionado mudou durante o processamento. O texto está pronto na janela para copiar."
                 setMessage(notice.isEmpty ? delivery : "\(notice) \(delivery)")
-                if !inserted { refreshHistory(); showLatest(); showWindow() }
+                if !inserted {
+                    refreshHistory(); detail.string = result
+                    feedback = notice.isEmpty ? "Texto pronto · copie pelo ícone do FalaMac" : "Confira o resultado no FalaMac"
+                }
             } catch {
                 setMessage("Falha: \(error.localizedDescription). O áudio temporário será apagado.")
+                feedback = "Não foi possível transcrever · detalhes no ícone do FalaMac"
             }
         }
     }
@@ -245,23 +259,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func setState(_ next: String) {
+        briefStatusTask?.cancel(); briefStatusTask = nil
         state = next
+        keyboard.setCancellationActive(next == "starting" || next == "recording")
+        hudCancel.isHidden = next != "starting" && next != "recording"
         let image = next == "recording" ? "record.circle.fill" : next == "processing" ? "ellipsis.circle" : "waveform"
         statusItem?.button?.image = NSImage(systemSymbolName: image, accessibilityDescription: "FalaMac")
         statusItem?.button?.contentTintColor = next == "recording" ? .systemRed : nil
-        if next == "recording" { hudLabel.stringValue = "● Gravando…"; hud.orderFrontRegardless() }
+        if next == "starting" { hudLabel.stringValue = "Preparando microfone…"; hud.orderFrontRegardless() }
+        else if next == "recording" { hudLabel.stringValue = "● Gravando…"; hud.orderFrontRegardless() }
         else if next == "processing" { hudLabel.stringValue = "Organizando sua fala…"; hud.orderFrontRegardless() }
         else { hud?.orderOut(nil) }
         if next == "recording" { setMessage("Gravando. Use ⌃⌥Espaço para terminar. Limite: 5 minutos.") }
         if next == "processing" { setMessage("Transcrevendo e organizando…") }
     }
 
-    private func setMessage(_ text: String) { message.stringValue = text }
+    private func setMessage(_ text: String) { message.stringValue = text; statusItem?.button?.toolTip = text }
+
+    private func showBriefStatus(_ text: String) {
+        briefStatusTask?.cancel()
+        hudCancel.isHidden = true; hudLabel.stringValue = text; hud.orderFrontRegardless()
+        briefStatusTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 2_500_000_000) }
+            catch { return }
+            guard let self, state == "idle" else { return }
+            hud.orderOut(nil)
+        }
+    }
 
     private func buildMenu() {
         let mainMenu = NSMenu()
         let appMenuItem = NSMenuItem(); let appMenu = NSMenu(title: "FalaMac")
         appMenuItem.submenu = appMenu; mainMenu.addItem(appMenuItem)
+        let recordMenu = appMenu.addItem(withTitle: "Gravar / terminar", action: #selector(toggleRecording), keyEquivalent: "")
+        recordMenu.target = self
         let mainQuit = appMenu.addItem(withTitle: "Encerrar FalaMac", action: #selector(quitApp), keyEquivalent: "q")
         mainQuit.target = self
         let editItem = NSMenuItem(); let edit = NSMenu(title: "Editar"); editItem.submenu = edit; mainMenu.addItem(editItem)
@@ -273,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "FalaMac")
         let menu = NSMenu()
-        for (title, action) in [("Abrir FalaMac", #selector(showWindow)), ("Gravar / terminar — ⌃⌥Espaço", #selector(toggleRecording)),
+        for (title, action) in [("Abrir FalaMac", #selector(showWindow)), ("Ver consumo", #selector(showConsumption)), ("Copiar último texto", #selector(copyLatest)), ("Gravar / terminar — ⌃⌥Espaço", #selector(toggleRecording)),
                                 ("Descartar gravação", #selector(cancelRecording))] {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self
         }
@@ -295,17 +326,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
 
     private func buildHUD() {
-        hud = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 52),
+        hud = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 56),
                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         hud.level = .floating; hud.isOpaque = false; hud.backgroundColor = .clear
-        hud.ignoresMouseEvents = true; hud.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        hud.ignoresMouseEvents = false; hud.becomesKeyOnlyIfNeeded = true; hud.hidesOnDeactivate = false
+        hud.hasShadow = true; hud.appearance = NSAppearance(named: .vibrantDark)
+        hud.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let effect = NSVisualEffectView(frame: hud.contentView!.bounds)
         effect.material = .hudWindow; effect.blendingMode = .behindWindow; effect.state = .active
-        effect.wantsLayer = true; effect.layer?.cornerRadius = 16
+        effect.appearance = NSAppearance(named: .vibrantDark)
+        effect.wantsLayer = true; effect.layer?.cornerRadius = 16; effect.layer?.masksToBounds = true
         hud.contentView = effect
-        hudLabel.alignment = .center; hudLabel.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview(hudLabel)
-        NSLayoutConstraint.activate([hudLabel.centerXAnchor.constraint(equalTo: effect.centerXAnchor), hudLabel.centerYAnchor.constraint(equalTo: effect.centerYAnchor)])
-        if let screen = NSScreen.main?.visibleFrame { hud.setFrameOrigin(NSPoint(x: screen.midX - 220, y: screen.minY + 40)) }
+        hudLabel.textColor = .white; hudLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        hudLabel.lineBreakMode = .byTruncatingTail
+        hudCancel.refusesFirstResponder = true; hudCancel.bezelStyle = .rounded
+        let row = NSStackView(views: [hudLabel, hudCancel]); row.spacing = 18; row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview(row)
+        NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
+            row.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -16), row.centerYAnchor.constraint(equalTo: effect.centerYAnchor)])
+        if let screen = NSScreen.main?.visibleFrame { hud.setFrameOrigin(NSPoint(x: screen.midX - 270, y: screen.minY + 40)) }
     }
 
     private func buildWindow() {
@@ -320,6 +359,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         tabs.heightAnchor.constraint(greaterThanOrEqualToConstant: 460).isActive = true
         let historyTab = NSTabViewItem(identifier: "history"); historyTab.label = "Histórico"; historyTab.view = historyView(); tabs.addTabViewItem(historyTab)
         let settingsTab = NSTabViewItem(identifier: "settings"); settingsTab.label = "Configuração"; settingsTab.view = settingsView(); tabs.addTabViewItem(settingsTab)
+        let usageTab = NSTabViewItem(identifier: "usage"); usageTab.label = "Consumo"; usageTab.view = consumption; tabs.addTabViewItem(usageTab)
+        consumption.onRefresh = { [weak self] in self?.refreshProviderUsage(force: true) }
+        tabs.delegate = self
     }
 
     private func historyView() -> NSView {
@@ -437,7 +479,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func applyKeys(_ groq: Keychain.Loaded, _ router: Keychain.Loaded) {
+        let oldRouterKey = routerKey
         groqKey = groq.value ?? ""; routerKey = router.value ?? ""
+        if oldRouterKey != routerKey {
+            providerUsageTask?.cancel(); providerUsageTask = nil; lastUsageRefresh = nil
+            consumption.reset(authorized: !routerKey.isEmpty)
+        }
         keysNeedAuthorization = groq.needsAuthorization || router.needsAuthorization
         refreshKeyPlaceholders()
     }
@@ -463,6 +510,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func refreshPermissionStatus() {
         let allowed = AXIsProcessTrusted()
+        if allowed && !lastAccessibilityAllowed {
+            keyboard.enableFn(fnSetting > 0)
+            keyboard.setCancellationActive(state == "starting" || state == "recording")
+        }
+        lastAccessibilityAllowed = allowed
         permissionLabel.stringValue = allowed ? "✓ Inserção automática autorizada pelo macOS."
             : "Autorize Acessibilidade para o texto entrar automaticamente no campo selecionado."
         permissionLabel.textColor = allowed ? .systemGreen : .systemOrange
@@ -499,6 +551,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let bytes = (try? FileManager.default.attributesOfItem(atPath: history.directory.appendingPathComponent("history.json").path)[.size] as? Int) ?? 0
         diskLabel.stringValue = "\(history.entries.count) textos · histórico \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) / 10 MB · retenção \(days) dias. Busca em todo o histórico; lista de até 200 resultados."
         usageLabel.stringValue = String(format: "Mês: %d gravações · %.1f min · US$ %.4f estimados / US$ %.2f. Confira a cobrança nos fornecedores.", usage.current.recordings, usage.current.seconds / 60, usage.current.dollars, budgetLimit)
+        consumption.showLocal(usage.current, budget: budgetLimit)
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        if tabViewItem?.identifier as? String == "usage" { refreshProviderUsage(force: false) }
+    }
+
+    @objc private func showConsumption() { tabs.selectTabViewItem(at: 2); showWindow() }
+
+    @objc private func copyLatest() {
+        guard !latestText.isEmpty else { setMessage("Ainda não há texto nesta sessão."); showBriefStatus("Nenhum texto pronto nesta sessão"); return }
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(latestText, forType: .string)
+        unsavedText = nil; setMessage("Último texto copiado."); showBriefStatus("Último texto copiado")
+    }
+
+    private func refreshProviderUsage(force: Bool) {
+        do { try usage.rollover() }
+        catch { consumption.failed("Não foi possível atualizar o resumo local."); return }
+        consumption.showLocal(usage.current, budget: budgetLimit)
+        guard !routerKey.isEmpty else { consumption.reset(); return }
+        guard providerUsageTask == nil else { return }
+        if !force, let lastUsageRefresh, Date().timeIntervalSince(lastUsageRefresh) < 60 { return }
+        let key = routerKey
+        consumption.loading()
+        providerUsageTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let value = try await ProviderUsageClient.fetch(key: key)
+                guard !Task.isCancelled, routerKey == key else { return }
+                let date = Date(); lastUsageRefresh = date; consumption.show(value, date: date)
+            } catch {
+                guard !Task.isCancelled, routerKey == key else { return }
+                consumption.failed(error.localizedDescription)
+            }
+            providerUsageTask = nil
+        }
     }
 
     private func expireSessionText() {
