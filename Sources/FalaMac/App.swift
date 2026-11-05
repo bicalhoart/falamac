@@ -25,11 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var cleanupTimer: Timer?
     private var workTask: Task<Void, Never>?
     private var target: InsertionTarget?
+    private var captureFailure: InsertionTarget.CaptureFailure?
     private var state = "idle"
     private var releasePending = false
     private var recordingDir: URL!
     private var groqKey = ""
     private var routerKey = ""
+    private var keysNeedAuthorization = false
     private var latestText = ""
     private var unsavedText: String?
     private var latestDate: Date?
@@ -44,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let message = NSTextField(wrappingLabelWithString: "Pronto. Use ⌃⌥Espaço para começar e terminar.")
     private let usageLabel = NSTextField(wrappingLabelWithString: "")
     private let diskLabel = NSTextField(wrappingLabelWithString: "")
+    private let permissionLabel = NSTextField(wrappingLabelWithString: "")
+    private let keyLabel = NSTextField(wrappingLabelWithString: "")
     private let groqField = NSSecureTextField()
     private let routerField = NSSecureTextField()
     private let retention = NSPopUpButton()
@@ -87,8 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             } catch { /* Configuration view reports actual registration state. */ }
         }
         buildMenu(); buildWindow(); buildHUD()
-        groqKey = Keychain.read("groq") ?? ""; routerKey = Keychain.read("openrouter") ?? ""
-        refreshKeyPlaceholders()
+        applyKeys(Keychain.loadAtLaunch("groq"), Keychain.loadAtLaunch("openrouter"))
         keyboard.toggle = { [weak self] in self?.toggleRecording() }
         keyboard.fnChanged = { [weak self] down in
             guard let self else { return }
@@ -123,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         showWindow(); return true
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) { refreshPermissionStatus() }
+
     func applicationWillTerminate(_ notification: Notification) {
         workTask?.cancel(); recorder.cancel(); keyboard.stop(); cleanupTimer?.invalidate()
         try? history?.clean(days: days)
@@ -146,7 +151,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func beginRecording() {
         guard state == "idle" else { return }
-        guard !groqKey.isEmpty else { setMessage("Cadastre a chave Groq em Configuração."); tabs.selectTabViewItem(at: 1); showWindow(); return }
+        guard !groqKey.isEmpty else {
+            setMessage(keysNeedAuthorization ? "Clique em “Autorizar chaves salvas” na Configuração para liberar o acesso do FalaMac no macOS."
+                : "Cadastre a chave Groq em Configuração.")
+            tabs.selectTabViewItem(at: 1); showWindow(); return
+        }
         if unsavedText != nil {
             setMessage("Copie ou descarte o último texto na janela antes de gravar novamente."); showWindow(); return
         }
@@ -155,11 +164,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             setMessage("Limite mensal estimado atingido. Confira os gastos nos fornecedores ou ajuste o teto em Configuração.")
             showWindow(); return
         }
-        target = InsertionTarget.capture(); releasePending = false; setState("starting")
+        releasePending = false; setState("starting")
         let job = UUID(); recordingJob = job
         workTask = Task { [weak self] in
             guard let self else { return }
             do {
+                (target, captureFailure) = await InsertionTarget.prepare()
+                try Task.checkCancellation()
                 try await recorder.start(directory: recordingDir)
                 try Task.checkCancellation()
                 setState("recording")
@@ -213,9 +224,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     if days > 0 { unsavedText = nil }
                 } catch { notice = "Texto pronto, mas não foi possível salvar o histórico: \(error.localizedDescription)" }
                 // A failed rewrite is reviewable in the window, never pasted without review.
-                let inserted = notice.isEmpty && (target?.insert(result) ?? false)
+                let inserted: Bool
+                if notice.isEmpty, let target { inserted = await target.insert(result) }
+                else { inserted = false }
                 if inserted { unsavedText = nil }
-                let delivery = inserted ? "Texto enviado ao campo ativo. Confira o resultado no aplicativo." : "Texto pronto na janela para copiar."
+                let delivery = inserted ? "Texto enviado ao campo ativo. Confira o resultado no aplicativo."
+                    : captureFailure?.rawValue ?? "O campo selecionado mudou durante o processamento. O texto está pronto na janela para copiar."
                 setMessage(notice.isEmpty ? delivery : "\(notice) \(delivery)")
                 if !inserted { refreshHistory(); showLatest(); showWindow() }
             } catch {
@@ -337,6 +351,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let container = stack()
         let intro = NSTextField(wrappingLabelWithString: "Cadastre suas chaves para começar. Elas ficam no Chaves do macOS. O áudio vai à Groq; a transcrição vai ao OpenRouter para ser organizada.")
         container.addArrangedSubview(intro)
+        permissionLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        container.addArrangedSubview(permissionLabel); refreshPermissionStatus()
+        keyLabel.font = .systemFont(ofSize: 11); container.addArrangedSubview(keyLabel)
         groqField.placeholderString = "Chave Groq"; routerField.placeholderString = "Chave OpenRouter"
         groqField.widthAnchor.constraint(greaterThanOrEqualToConstant: 440).isActive = true
         routerField.widthAnchor.constraint(greaterThanOrEqualToConstant: 440).isActive = true
@@ -359,10 +376,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         container.addArrangedSubview(grid)
         startup.state = SMAppService.mainApp.status == .enabled ? .on : .off
         container.addArrangedSubview(startup)
-        container.addArrangedSubview(button("Salvar configuração", #selector(saveSettings)))
+        let actions = NSStackView(views: [button("Salvar configuração", #selector(saveSettings)), button("Autorizar chaves salvas", #selector(authorizeKeys)), button("Testar inserção", #selector(testInsertion))])
+        actions.spacing = 10; container.addArrangedSubview(actions)
         let note = NSTextField(wrappingLabelWithString: "⌃⌥Espaço significa Control + Option + Espaço e funciona como liga/desliga. Para usar Fn, desative esse atalho no Typeless e selecione “Não fazer nada” para a tecla Globo nos ajustes do teclado. Autorize Acessibilidade para inserir texto e monitorar Fn.\n\nO teto acima é uma estimativa local. Configure também os limites de cobrança nas contas Groq e OpenRouter. Modelo: Gemini 2.5 Flash Lite. Áudios: até 5 minutos, apagados após o processamento. Histórico: até 30 dias ou 10 MB; limpeza ao abrir e a cada hora.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; container.addArrangedSubview(note)
-        let links = NSStackView(views: [button("Abrir Groq", #selector(openGroq)), button("Abrir OpenRouter", #selector(openRouter)), button("Autorizar Acessibilidade", #selector(accessibility)), button("Pasta de dados", #selector(openData))])
+        let links = NSStackView(views: [button("Abrir Groq", #selector(openGroq)), button("Abrir OpenRouter", #selector(openRouter)), button("Acessibilidade", #selector(accessibility)), button("Tecla Fn do Mac", #selector(openKeyboard)), button("Pasta de dados", #selector(openData))])
         links.spacing = 10; container.addArrangedSubview(links)
         return container
     }
@@ -383,8 +401,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         do {
             if !groqField.stringValue.isEmpty { try Keychain.save(groqField.stringValue, account: "groq") }
             if !routerField.stringValue.isEmpty { try Keychain.save(routerField.stringValue, account: "openrouter") }
-            groqKey = Keychain.read("groq") ?? ""; routerKey = Keychain.read("openrouter") ?? ""
-            groqField.stringValue = ""; routerField.stringValue = ""; refreshKeyPlaceholders()
+            groqField.stringValue = ""; routerField.stringValue = ""
+            applyKeys(Keychain.load("groq"), Keychain.load("openrouter"))
+            if !keysNeedAuthorization { Keychain.rememberAuthorization() }
             let previousDays = days
             let newDays = [0, 1, 7, 30][max(0, retention.indexOfSelectedItem)]
             if newDays < previousDays && !history.entries.isEmpty {
@@ -409,8 +428,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func refreshKeyPlaceholders() {
-        groqField.placeholderString = groqKey.isEmpty ? "Cole a chave Groq aqui" : "Chave salva — preencha apenas para trocar"
-        routerField.placeholderString = routerKey.isEmpty ? "Cole a chave OpenRouter aqui" : "Chave salva — preencha apenas para trocar"
+        let unavailable = keysNeedAuthorization ? "Chave indisponível — autorize o acesso às chaves salvas" : "Cole a chave aqui"
+        groqField.placeholderString = groqKey.isEmpty ? unavailable : "Chave salva — preencha apenas para trocar"
+        routerField.placeholderString = routerKey.isEmpty ? unavailable : "Chave salva — preencha apenas para trocar"
+        keyLabel.stringValue = keysNeedAuthorization ? "Esta versão precisa de autorização para ler as chaves salvas. Clique em “Autorizar chaves salvas” quando puder usar a senha de login do Mac."
+            : "As chaves ficam protegidas no Chaves do macOS."
+        keyLabel.textColor = keysNeedAuthorization ? .systemOrange : .secondaryLabelColor
+    }
+
+    private func applyKeys(_ groq: Keychain.Loaded, _ router: Keychain.Loaded) {
+        groqKey = groq.value ?? ""; routerKey = router.value ?? ""
+        keysNeedAuthorization = groq.needsAuthorization || router.needsAuthorization
+        refreshKeyPlaceholders()
+    }
+
+    @objc private func authorizeKeys() {
+        guard state == "idle" else { return }
+        setMessage("O macOS vai pedir acesso às chaves do FalaMac. Use a senha de login do Mac somente na janela do sistema. Você pode negar e tentar depois.")
+        setState("authorizing")
+        workTask = Task { [weak self] in
+            let values = await Task.detached {
+                let groq = Keychain.load("groq", allowPrompt: true)
+                // If access was denied, don't immediately ask a second time.
+                let router = Keychain.load("openrouter", allowPrompt: !groq.needsAuthorization)
+                return (groq, router)
+            }.value
+            guard let self else { return }
+            applyKeys(values.0, values.1); setState("idle")
+            if !keysNeedAuthorization { Keychain.rememberAuthorization() }
+            setMessage(keysNeedAuthorization ? "Acesso às chaves não autorizado. Elas continuam guardadas no macOS; você pode autorizar depois."
+                : "Acesso às chaves verificado. Use seu atalho para gravar.")
+        }
+    }
+
+    private func refreshPermissionStatus() {
+        let allowed = AXIsProcessTrusted()
+        permissionLabel.stringValue = allowed ? "✓ Inserção automática autorizada pelo macOS."
+            : "Autorize Acessibilidade para o texto entrar automaticamente no campo selecionado."
+        permissionLabel.textColor = allowed ? .systemGreen : .systemOrange
+    }
+
+    @objc private func testInsertion() {
+        guard state == "idle" else { return }
+        guard AXIsProcessTrusted() else {
+            setMessage(InsertionTarget.CaptureFailure.permission.rawValue)
+            refreshPermissionStatus(); return
+        }
+        setMessage("Teste: clique em um campo de outro app nos próximos 5 segundos. Nenhum áudio ou API será usado.")
+        setState("testing")
+        workTask = Task { [weak self] in
+            guard let self else { return }
+            defer { setState("idle") }
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                let (field, failure) = await InsertionTarget.prepare()
+                if let field, await field.insert("Teste de inserção do FalaMac.") {
+                    setMessage("Teste enviado ao campo selecionado. Confira o texto no outro aplicativo.")
+                } else {
+                    setMessage(failure?.rawValue ?? "O campo de teste mudou. Tente novamente mantendo o cursor no campo.")
+                    showWindow()
+                }
+            } catch { setMessage("Teste cancelado.") }
+        }
     }
 
     private func refreshHistory() {
@@ -470,6 +549,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+    @objc private func openKeyboard() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
+        setMessage("Em Teclado, altere “Press 🌐 key to” para “Do Nothing”. Isso impede a troca de idioma ao gravar com Fn.")
     }
     @objc private func openGroq() { NSWorkspace.shared.open(URL(string: "https://console.groq.com/keys")!) }
     @objc private func openRouter() { NSWorkspace.shared.open(URL(string: "https://openrouter.ai/settings/keys")!) }

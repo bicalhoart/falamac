@@ -19,6 +19,7 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 2. Crie sua conta e chave em [Groq](https://console.groq.com/keys). É possível testar a camada gratuita dentro das cotas disponíveis; confira as condições na própria conta.
 3. Crie uma chave em [OpenRouter](https://openrouter.ai/settings/keys). Configure um limite exclusivo para essa chave e mantenha recarga automática desativada se quiser controlar o saldo manualmente. Configure o limite Groq separadamente se usar plano pago.
 4. Cole as chaves nos campos protegidos do aplicativo e salve. Elas ficam no Chaves do macOS. Não coloque chaves no código, no GitHub ou no chat.
+   Atualizações da versão pessoal podem pedir novamente acesso às chaves. O aplicativo não mostra esse pedido automaticamente ao abrir: use **Autorizar chaves salvas**. A senha solicitada é normalmente a de login do Mac e deve ser preenchida apenas na janela do sistema. Negar não apaga as chaves.
 5. Autorize Microfone ao começar uma gravação e Acessibilidade para inserir texto em outros aplicativos. Não é necessário capturar a tela.
 6. Marque “Abrir ao entrar no Mac” e salve. O macOS pode pedir aprovação em Geral → Itens de Início. Fechar a janela mantém o aplicativo na barra de menus; “Encerrar FalaMac” para o processo até você abrir de novo ou entrar novamente no Mac.
 
@@ -26,9 +27,11 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 
 - `Control + Option + Espaço`: aperte para começar e aperte novamente para terminar.
 - Fn é opcional: segurar para falar ou alternar a cada toque. Desative o atalho Fn no Typeless e a ação padrão da tecla Globo no macOS antes de usar. A detecção de Fn precisa ser validada no teclado real; o atalho alternativo continua disponível.
+- Para impedir que Fn também alterne o idioma do teclado, use Configuração → Tecla Fn do Mac e escolha **Do Nothing** em **Press 🌐 key to**. A mudança é uma preferência do macOS e continua valendo ao encerrar o FalaMac. Para alternar layouts, use **Control + Espaço** ou o menu de Entrada na barra superior.
 - Até 5 minutos por gravação. Indicador visível durante captura e processamento. Silêncio e gravações muito curtas são descartados antes do envio.
 - Se o foco mudar para outro aplicativo ou campo durante o processamento, o FalaMac abre o resultado para você copiar. Campos protegidos são excluídos. Alguns aplicativos não aceitam inserção por acessibilidade; confira sempre o resultado.
-- A inserção usa Acessibilidade e, quando necessário, um comando de colar. Nesse caso, restaura o conteúdo anterior da área de transferência após um segundo, desde que você não tenha copiado algo novo. O aplicativo de destino não confirma que recebeu o comando de colar.
+- A inserção usa Acessibilidade para reconhecer o campo e envia um comando de colar após soltar os modificadores do atalho. Isso mantém os eventos de edição esperados por campos em React e Electron. Restaura o conteúdo anterior da área de transferência após um segundo, desde que você não tenha copiado algo novo. O aplicativo de destino não confirma que recebeu o comando de colar.
+- Configuração mostra se a inserção está autorizada pelo macOS. O botão **Testar inserção** dá cinco segundos para clicar num campo de outro app e insere uma frase de teste, sem áudio nem uso das APIs. Se faltar permissão, não encontrar campo ou o foco mudar, informa o motivo.
 - Se a organização falhar, preserva a transcrição original para revisão e cópia. Sem chave OpenRouter, funciona apenas como transcritor.
 - O editor mantém perguntas e prompts como texto; não tenta responder a eles nem inventar informações.
 
