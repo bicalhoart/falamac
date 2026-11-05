@@ -6,11 +6,13 @@
   <key>CFBundleIdentifier</key><string>art.bicalho.falamac</string>
   <key>CFBundleExecutable</key><string>FalaMac</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2.2</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>CFBundleVersion</key><string>6</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string></array>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><false/>
-  <key>NSMicrophoneUsageDescription</key><string>O FalaMac grava sua fala somente quando você aciona o atalho. O áudio é enviado à Groq para transcrição e apagado localmente após o processamento.</string>
+  <key>NSMicrophoneUsageDescription</key><string>FalaMac records your voice only when you use the recording shortcut. Audio is sent to Groq for transcription and deleted locally after processing.</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSHumanReadableCopyright</key><string>Uso pessoal — Artur Bicalho</string>
+  <key>NSHumanReadableCopyright</key><string>Personal use — Artur Bicalho</string>
 </dict></plist>

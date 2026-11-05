@@ -11,14 +11,14 @@ public enum APIError: LocalizedError {
         switch self {
         case .http(let code, let provider):
             switch code {
-            case 401, 403: return "\(provider): confira a chave e as permissões da conta."
-            case 402: return "\(provider): saldo ou limite de gasto atingido."
-            case 429: return "\(provider): limite de requisições atingido. Tente novamente mais tarde."
-            default: return "\(provider) retornou erro \(code). Tente novamente mais tarde."
+            case 401, 403: return "\(provider): check your API key and account permissions."
+            case 402: return "\(provider): balance or spending limit reached."
+            case 429: return "\(provider): rate limit reached. Try again later."
+            default: return "\(provider) returned error \(code). Try again later."
             }
-        case .empty: return "A IA retornou um texto vazio."
-        case .truncated: return "O texto organizado ficou incompleto. A transcrição original foi preservada."
-        case .invalidResponse: return "Resposta inesperada do serviço de IA."
+        case .empty: return "The AI returned empty text."
+        case .truncated: return "The cleaned-up text was incomplete. Your original transcript is safe."
+        case .invalidResponse: return "Unexpected response from the AI service."
         }
     }
 }

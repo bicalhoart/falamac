@@ -76,6 +76,6 @@ enum Keychain {
     }
     enum KeyError: LocalizedError {
         case status(OSStatus)
-        var errorDescription: String? { "Não foi possível salvar a chave no Chaves do macOS." }
+        var errorDescription: String? { "Could not save the key in macOS Keychain." }
     }
 }

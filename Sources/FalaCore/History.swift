@@ -67,5 +67,5 @@ public final class HistoryStore {
 
 public enum StorageError: LocalizedError {
     case tooLarge
-    public var errorDescription: String? { "O arquivo de histórico excede 10 MB. Abra a pasta de dados para revisá-lo." }
+    public var errorDescription: String? { "History exceeds 10 MB. Open the data folder to check." }
 }

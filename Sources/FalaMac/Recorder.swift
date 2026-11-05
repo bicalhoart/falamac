@@ -73,9 +73,9 @@ final class Recorder: NSObject, AVAudioRecorderDelegate {
         case permission, start, silence
         var errorDescription: String? {
             switch self {
-            case .permission: return "Autorize o microfone em Ajustes do Sistema → Privacidade e Segurança → Microfone."
-            case .start: return "Não foi possível iniciar o microfone."
-            case .silence: return "Nenhuma fala detectada. O áudio foi descartado sem envio."
+            case .permission: return "Allow Microphone access in System Settings → Privacy & Security → Microphone."
+            case .start: return "Could not start the microphone."
+            case .silence: return "No speech detected. Audio was deleted without sending."
             }
         }
     }

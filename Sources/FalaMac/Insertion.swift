@@ -10,9 +10,9 @@ struct InsertionTarget {
     let identity: FieldIdentity?
 
     enum CaptureFailure: String {
-        case permission = "Autorize o FalaMac em Ajustes do Sistema → Privacidade e Segurança → Acessibilidade para inserir o texto automaticamente."
-        case noField = "Não foi encontrado um campo de texto editável. O resultado está disponível para copiar."
-        case ownWindow = "O FalaMac está em primeiro plano. Use Copiar texto e cole no campo desejado."
+        case permission = "Allow FalaMac in System Settings → Privacy & Security → Accessibility to paste automatically."
+        case noField = "No editable field found. Your text is ready to copy."
+        case ownWindow = "FalaMac is in front. Copy the text and paste it into another app."
     }
 
     /// Always resolve the field at delivery time. Never keep a recording-start

@@ -40,33 +40,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var lastUsageRefresh: Date?
     private var lastAccessibilityAllowed = false
 
-    private let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
+    private let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 620),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     private let tabs = NSTabView()
     private let consumption = ConsumptionView(frame: .zero)
     private let table = NSTableView()
     private let detail = NSTextView()
     private let search = NSSearchField()
-    private let message = NSTextField(wrappingLabelWithString: "Pronto. Use ⌃⌥Espaço para começar e terminar.")
-    private let usageLabel = NSTextField(wrappingLabelWithString: "")
+    private let message = NSTextField(wrappingLabelWithString: "Ready. Use your recording shortcut.")
     private let diskLabel = NSTextField(wrappingLabelWithString: "")
     private let permissionLabel = NSTextField(wrappingLabelWithString: "")
+    private let apiFields = NSStackView()
+    private let extraSettings = NSStackView()
+    private var editingKeys = false
+    private lazy var accessButton = button("Allow Accessibility", #selector(accessibility))
+    private lazy var unlockKeys = button("Unlock saved keys", #selector(authorizeKeys))
     private let keyLabel = NSTextField(wrappingLabelWithString: "")
     private let groqField = NSSecureTextField()
     private let routerField = NSSecureTextField()
     private let retention = NSPopUpButton()
     private let fnMode = NSPopUpButton()
-    private let startup = NSButton(checkboxWithTitle: "Abrir ao entrar no Mac", target: nil, action: nil)
-    private let pauseMusic = NSButton(checkboxWithTitle: "Pausar música ao gravar · retomar manualmente no player", target: nil, action: nil)
+    private let startup = NSButton(checkboxWithTitle: "Launch at login", target: nil, action: nil)
+    private let pauseMusic = NSButton(checkboxWithTitle: "Pause music while recording", target: nil, action: nil)
     private let budget = NSTextField(string: "5")
     private var visibleEntries: [Entry] = []
     private var hud: NSPanel!
-    private let hudLabel = NSTextField(labelWithString: "Gravando…")
+    private let hudLabel = NSTextField(labelWithString: "Recording…")
     private let hudMeter = NSProgressIndicator()
-    private lazy var hudCopy = NSButton(title: "Copiar texto", target: self, action: #selector(copyLatest))
-    private lazy var hudRetry = NSButton(title: "Organizar de novo", target: self, action: #selector(retryOrganization))
-    private lazy var hudDismiss = NSButton(title: "Fechar", target: self, action: #selector(dismissHUD))
-    private lazy var hudCancel = NSButton(title: "Cancelar · Esc", target: self, action: #selector(cancelRecording))
+    private lazy var hudCopy = NSButton(title: "Copy text", target: self, action: #selector(copyLatest))
+    private lazy var hudRetry = NSButton(title: "Retry cleanup", target: self, action: #selector(retryOrganization))
+    private lazy var hudDismiss = NSButton(title: "Close", target: self, action: #selector(dismissHUD))
+    private lazy var hudCancel = NSButton(title: "Cancel · Esc", target: self, action: #selector(cancelRecording))
 
     private var days: Int { UserDefaults.standard.object(forKey: "retentionDays") as? Int ?? 30 }
     private var budgetLimit: Double {
@@ -91,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             try cleanRecordings()
             try history.clean(days: days)
         } catch {
-            let alert = NSAlert(); alert.messageText = "Não foi possível abrir os dados do FalaMac"
+            let alert = NSAlert(); alert.messageText = "Could not open FalaMac data"
             alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
         }
         if !UserDefaults.standard.bool(forKey: "startupConfigured") {
@@ -114,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
         keyboard.start(); keyboard.enableFn(fnSetting > 0)
         recorder.onLimit = { [weak self] in self?.finishRecording() }
-        recorder.onFailure = { [weak self] in self?.cancelRecording(); self?.setMessage("Falha na gravação. O áudio temporário foi descartado.") }
+        recorder.onFailure = { [weak self] in self?.cancelRecording(); self?.setMessage("Recording failed. Temporary audio was deleted.") }
         recorder.level = { [weak self] power in
             self?.hudMeter.doubleValue = Double(max(0, min(1, (power + 55) / 55)))
         }
@@ -122,14 +126,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             MainActor.assumeIsolated {
                 guard let self else { return }
                 do { try self.history.clean(days: self.days); try self.usage.rollover(); self.expireSessionText(); self.refreshHistory() }
-                catch { self.setMessage("Falha na limpeza: \(error.localizedDescription)") }
+                catch { self.setMessage("Cleanup failed: \(error.localizedDescription)") }
             }
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(willSleep),
             name: NSWorkspace.willSleepNotification, object: nil)
         refreshHistory()
         if groqKey.isEmpty || routerKey.isEmpty { tabs.selectTabViewItem(at: 1); showWindow() }
-        if keyboard.registrationFailed { setMessage("O atalho ⌃⌥Espaço já está em uso. Libere-o em outro aplicativo e reabra o FalaMac.") }
+        if keyboard.registrationFailed { setMessage("⌃⌥Space is already in use. Disable it in the other app, then reopen FalaMac.") }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -165,16 +169,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func beginRecording() {
         guard state == "idle" else { return }
         guard !groqKey.isEmpty else {
-            setMessage(keysNeedAuthorization ? "Clique em “Autorizar chaves salvas” na Configuração para liberar o acesso do FalaMac no macOS."
-                : "Cadastre a chave Groq em Configuração.")
+            setMessage(keysNeedAuthorization ? "Open Settings and click Unlock saved keys."
+                : "Add your Groq API key in Settings.")
             tabs.selectTabViewItem(at: 1); showWindow(); return
         }
         if unsavedText != nil {
-            setMessage("Copie ou descarte o último texto na janela antes de gravar novamente."); showWindow(); return
+            setMessage("Copy the unsaved text before recording again."); showWindow(); return
         }
         do { try usage.rollover() } catch { setMessage(error.localizedDescription); return }
         guard usage.current.dollars + 0.014 <= budgetLimit else {
-            setMessage("Limite mensal estimado atingido. Confira os gastos nos fornecedores ou ajuste o teto em Configuração.")
+            setMessage("Monthly estimate limit reached. Check Usage or adjust your limit in Settings.")
             showWindow(); return
         }
         pendingOrganization = nil
@@ -209,9 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             var hasResult = false
             defer {
                 do { try FileManager.default.removeItem(at: file) }
-                catch { setMessage("Não foi possível apagar o áudio temporário. Abra a pasta de dados para revisar.") }
+                catch { setMessage("Could not delete temporary audio. Open the data folder to check.") }
                 setState("idle"); refreshHistory()
-                if hasResult { showResultHUD(feedback ?? "Texto pronto") }
+                if hasResult { showResultHUD(feedback ?? "Text ready") }
                 else if let feedback { showBriefStatus(feedback) }
             }
             do {
@@ -231,16 +235,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                         let rewritten = try await AIClient.rewrite(text: raw, key: routerKey)
                         result = rewritten.text; organized = true; rewriteCost = rewritten.cost
                     } catch {
-                        notice = "A organização falhou. A transcrição original foi preservada. \(error.localizedDescription)"
+                        notice = "Cleanup failed. Your original transcript is safe. \(error.localizedDescription)"
                     }
                 } else {
                     rewriteCost = 0
-                    notice = "Transcrição sem organização. Autorize ou cadastre a chave OpenRouter em Configuração."
+                    notice = "Transcript not cleaned up. Unlock or add your OpenRouter key in Settings."
                 }
                 // Local accounting failures must not discard a successful rewrite or prevent delivery.
                 if let rewriteCost {
                     do { try usage.settle(reserved: reserved, seconds: seconds, rewriteCost: rewriteCost) }
-                    catch { notice += " Não foi possível atualizar a estimativa local de consumo." }
+                    catch { notice += " Could not update the local usage estimate." }
                 }
                 latestText = result; unsavedText = result; hasResult = true
                 let entry = Entry(text: result, seconds: seconds, organized: organized)
@@ -248,21 +252,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 do {
                     try history.add(entry, days: days)
                     if days > 0 { unsavedText = nil }
-                } catch { notice += " Texto pronto, mas não foi possível salvar o histórico: \(error.localizedDescription)" }
+                } catch { notice += " Text ready, but history could not be saved: \(error.localizedDescription)" }
                 // Never paste an unorganized fallback silently. Focus discovery is independent of rewriting.
                 let deliveryResult = organized ? await InsertionTarget.deliver(result) : (false, nil)
                 let inserted = deliveryResult.0
                 if inserted { unsavedText = nil }
-                let delivery = inserted ? "Colagem enviada ao campo ativo. Se não aparecer, use Copiar texto na barrinha."
-                    : deliveryResult.1?.rawValue ?? "O texto está disponível em Copiar texto na barrinha."
+                let delivery = inserted ? "Paste sent. If the text does not appear, use Copy text in the floating bar."
+                    : deliveryResult.1?.rawValue ?? "Use Copy text in the floating bar."
                 setMessage(notice.isEmpty ? delivery : "\(notice) \(delivery)")
                 refreshHistory(); detail.string = result
-                feedback = organized ? (inserted ? "Texto organizado · colagem enviada" : "Texto organizado · pronto para copiar")
-                    : "Sem organização · transcrição original"
+                feedback = organized ? (inserted ? "Cleaned up · paste sent" : "Cleaned up · ready to copy")
+                    : "Not cleaned up · original transcript"
 
             } catch {
-                setMessage("Falha: \(error.localizedDescription). O áudio temporário será apagado.")
-                feedback = "Não foi possível transcrever · detalhes no ícone do FalaMac"
+                setMessage("Failed: \(error.localizedDescription). Temporary audio will be deleted.")
+                feedback = "Transcription failed · open FalaMac for details"
             }
         }
     }
@@ -270,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func cancelRecording() {
         guard state == "starting" || state == "recording" else { return }
         recordingJob = UUID(); workTask?.cancel(); recorder.cancel(); releasePending = false; setState("idle")
-        setMessage("Gravação descartada sem envio.")
+        setMessage("Recording canceled. Nothing was sent.")
     }
 
     private func setState(_ next: String) {
@@ -283,15 +287,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let image = next == "recording" ? "record.circle.fill" : next == "processing" ? "ellipsis.circle" : "waveform"
         statusItem?.button?.image = NSImage(systemSymbolName: image, accessibilityDescription: "FalaMac")
         statusItem?.button?.contentTintColor = next == "recording" ? .systemRed : nil
-        if next == "starting" { hudLabel.stringValue = "Preparando microfone…"; hud.orderFrontRegardless() }
-        else if next == "recording" { hudLabel.stringValue = "● Gravando…"; hud.orderFrontRegardless() }
-        else if next == "processing" { hudLabel.stringValue = "Organizando sua fala…"; hud.orderFrontRegardless() }
+        if next == "starting" { hudLabel.stringValue = "Preparing microphone…"; hud.orderFrontRegardless() }
+        else if next == "recording" { hudLabel.stringValue = "● Recording…"; hud.orderFrontRegardless() }
+        else if next == "processing" { hudLabel.stringValue = "Cleaning up your text…"; hud.orderFrontRegardless() }
         else { hud?.orderOut(nil) }
-        if next == "recording" { setMessage("Gravando. Use ⌃⌥Espaço para terminar. Limite: 5 minutos.") }
-        if next == "processing" { setMessage("Transcrevendo e organizando…") }
+        if next == "recording" { setMessage("Recording. Press your shortcut to finish. Up to 5 minutes.") }
+        if next == "processing" { setMessage("Transcribing and cleaning up…") }
     }
 
-    private func setMessage(_ text: String) { message.stringValue = text; statusItem?.button?.toolTip = text }
+    private func setMessage(_ text: String) { message.stringValue = text; message.toolTip = text; statusItem?.button?.toolTip = text }
 
     private func showBriefStatus(_ text: String) {
         briefStatusTask?.cancel()
@@ -322,34 +326,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func retryOrganization() {
         guard state == "idle", let entry = pendingOrganization else { return }
         guard !routerKey.isEmpty else {
-            setMessage("Autorize ou cadastre a chave OpenRouter em Configuração para organizar esta transcrição.")
+            setMessage("Unlock or add your OpenRouter key in Settings to clean up this transcript.")
             tabs.selectTabViewItem(at: 1); showWindow(); return
         }
         do { try usage.rollover() } catch { setMessage(error.localizedDescription); return }
         guard usage.current.dollars + 0.01 <= budgetLimit else {
-            setMessage("Limite mensal estimado atingido. Confira Consumo ou ajuste o teto em Configuração.")
+            setMessage("Monthly estimate limit reached. Check Usage or adjust your limit in Settings.")
             showWindow(); return
         }
         setState("processing")
         workTask = Task { [weak self] in
             guard let self else { return }
-            var feedback = "Sem organização · tente novamente"
+            var feedback = "Not cleaned up · try again"
             defer { setState("idle"); refreshHistory(); showResultHUD(feedback) }
             do {
                 let reservation = try usage.reserveRewrite()
                 let rewritten = try await AIClient.rewrite(text: entry.text, key: routerKey)
                 latestText = rewritten.text; unsavedText = rewritten.text; pendingOrganization = nil
                 let updated = Entry(id: entry.id, date: entry.date, text: rewritten.text, seconds: entry.seconds, organized: true)
-                var notice = "Texto organizado. Use Copiar texto na barrinha para colar onde quiser."
+                var notice = "Text cleaned up. Use Copy text to paste it where you want."
                 do { try usage.settleRewrite(reserved: reservation, cost: rewritten.cost) }
-                catch { notice += " Não foi possível atualizar a estimativa local de consumo." }
+                catch { notice += " Could not update the local usage estimate." }
                 do {
                     try history.add(updated, days: days)
                     if days > 0 { unsavedText = nil }
-                } catch { notice += " Não foi possível atualizar o histórico local." }
+                } catch { notice += " Could not update local history." }
                 detail.string = rewritten.text; setMessage(notice)
-                feedback = "Texto organizado · pronto para copiar"
-            } catch { setMessage("A organização falhou. A transcrição continua disponível. \(error.localizedDescription)") }
+                feedback = "Cleaned up · ready to copy"
+            } catch { setMessage("Cleanup failed. Your transcript is still available. \(error.localizedDescription)") }
         }
     }
 
@@ -357,33 +361,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let mainMenu = NSMenu()
         let appMenuItem = NSMenuItem(); let appMenu = NSMenu(title: "FalaMac")
         appMenuItem.submenu = appMenu; mainMenu.addItem(appMenuItem)
-        let recordMenu = appMenu.addItem(withTitle: "Gravar / terminar", action: #selector(toggleRecording), keyEquivalent: "")
+        let recordMenu = appMenu.addItem(withTitle: "Start / stop recording", action: #selector(toggleRecording), keyEquivalent: "")
         recordMenu.target = self
-        let mainQuit = appMenu.addItem(withTitle: "Encerrar FalaMac", action: #selector(quitApp), keyEquivalent: "q")
+        let mainQuit = appMenu.addItem(withTitle: "Quit FalaMac", action: #selector(quitApp), keyEquivalent: "q")
         mainQuit.target = self
-        let editItem = NSMenuItem(); let edit = NSMenu(title: "Editar"); editItem.submenu = edit; mainMenu.addItem(editItem)
-        edit.addItem(withTitle: "Recortar", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copiar", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Colar", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "Selecionar tudo", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let editItem = NSMenuItem(); let edit = NSMenu(title: "Edit"); editItem.submenu = edit; mainMenu.addItem(editItem)
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         NSApp.mainMenu = mainMenu
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "FalaMac")
         let menu = NSMenu()
-        for (title, action) in [("Abrir FalaMac", #selector(showWindow)), ("Ver consumo", #selector(showConsumption)), ("Copiar último texto", #selector(copyLatest)), ("Gravar / terminar — ⌃⌥Espaço", #selector(toggleRecording)),
-                                ("Descartar gravação", #selector(cancelRecording))] {
+        for (title, action) in [("Open FalaMac", #selector(showWindow)), ("Usage", #selector(showConsumption)), ("Copy latest text", #selector(copyLatest)), ("Start / stop recording — ⌃⌥Space", #selector(toggleRecording)),
+                                ("Cancel recording", #selector(cancelRecording))] {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self
         }
         menu.addItem(.separator())
-        let quit = menu.addItem(withTitle: "Encerrar FalaMac", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self
+        let quit = menu.addItem(withTitle: "Quit FalaMac", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self
         statusItem.menu = menu
     }
 
     @objc private func quitApp() {
         if state != "idle" || unsavedText != nil {
-            let alert = NSAlert(); alert.messageText = "Encerrar o FalaMac?"
-            alert.informativeText = "A gravação em andamento ou o texto ainda não salvo será descartado."
-            alert.addButton(withTitle: "Continuar usando"); alert.addButton(withTitle: "Encerrar")
+            let alert = NSAlert(); alert.messageText = "Quit FalaMac?"
+            alert.informativeText = "The current recording or unsaved text will be lost."
+            alert.addButton(withTitle: "Keep using FalaMac"); alert.addButton(withTitle: "Quit")
             if alert.runModal() != .alertSecondButtonReturn { return }
         }
         NSApp.terminate(nil)
@@ -407,7 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         hudLabel.lineBreakMode = .byTruncatingTail
         hudLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         hudMeter.isIndeterminate = false; hudMeter.minValue = 0; hudMeter.maxValue = 1
-        hudMeter.style = .bar; hudMeter.setAccessibilityLabel("Volume do microfone")
+        hudMeter.style = .bar; hudMeter.setAccessibilityLabel("Microphone level")
         for view in [hudLabel, hudMeter, hudCancel, hudCopy, hudRetry, hudDismiss] {
             view.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview(view)
             view.centerYAnchor.constraint(equalTo: effect.centerYAnchor).isActive = true
@@ -435,28 +439,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func buildWindow() {
-        window.title = "FalaMac"; window.isReleasedWhenClosed = false; window.minSize = NSSize(width: 800, height: 600); window.center()
+        window.title = "FalaMac"; window.isReleasedWhenClosed = false; window.minSize = NSSize(width: 760, height: 580); window.center()
         let root = NSStackView(); root.orientation = .vertical; root.spacing = 12; root.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         window.contentView = root
-        let heading = NSTextField(labelWithString: "FalaMac"); heading.font = .systemFont(ofSize: 25, weight: .semibold)
-        root.addArrangedSubview(heading)
-        message.font = .systemFont(ofSize: 12); message.textColor = .secondaryLabelColor; root.addArrangedSubview(message)
+        let heading = NSTextField(labelWithString: "FalaMac"); heading.font = .systemFont(ofSize: 23, weight: .semibold)
+        let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let help = button("Help", #selector(showHelp)); help.bezelStyle = .inline
+        let header = NSStackView(views: [heading, spacer, help]); header.alignment = .centerY
+        root.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -40).isActive = true
+        message.font = .systemFont(ofSize: 12); message.textColor = .secondaryLabelColor
+        message.maximumNumberOfLines = 2; message.lineBreakMode = .byTruncatingTail
+        root.addArrangedSubview(message)
         tabs.translatesAutoresizingMaskIntoConstraints = false; root.addArrangedSubview(tabs)
         tabs.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -40).isActive = true
-        tabs.heightAnchor.constraint(greaterThanOrEqualToConstant: 460).isActive = true
-        let historyTab = NSTabViewItem(identifier: "history"); historyTab.label = "Histórico"; historyTab.view = historyView(); tabs.addTabViewItem(historyTab)
-        let settingsTab = NSTabViewItem(identifier: "settings"); settingsTab.label = "Configuração"; settingsTab.view = settingsView(); tabs.addTabViewItem(settingsTab)
-        let usageTab = NSTabViewItem(identifier: "usage"); usageTab.label = "Consumo"; usageTab.view = consumption; tabs.addTabViewItem(usageTab)
+        tabs.heightAnchor.constraint(greaterThanOrEqualToConstant: 400).isActive = true
+        let historyTab = NSTabViewItem(identifier: "history"); historyTab.label = "History"; historyTab.view = historyView(); tabs.addTabViewItem(historyTab)
+        let settingsTab = NSTabViewItem(identifier: "settings"); settingsTab.label = "Settings"; settingsTab.view = settingsView(); tabs.addTabViewItem(settingsTab)
+        let usageTab = NSTabViewItem(identifier: "usage"); usageTab.label = "Usage"; usageTab.view = consumption; tabs.addTabViewItem(usageTab)
         consumption.onRefresh = { [weak self] in self?.refreshProviderUsage(force: true) }
         tabs.delegate = self
     }
 
     private func historyView() -> NSView {
         let container = stack()
-        search.placeholderString = "Buscar no histórico"; search.delegate = self
+        search.placeholderString = "Search history"; search.delegate = self
         container.addArrangedSubview(search)
         let split = NSSplitView(); split.isVertical = true; split.dividerStyle = .thin
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("text")); column.title = "Falas recentes"; table.addTableColumn(column)
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("text")); column.title = "Recent dictations"; table.addTableColumn(column)
         table.headerView = nil; table.rowHeight = 55; table.delegate = self; table.dataSource = self
         let list = NSScrollView(); list.documentView = table; list.hasVerticalScroller = true
         let textScroll = NSScrollView(); textScroll.documentView = detail; textScroll.hasVerticalScroller = true; textScroll.borderType = .bezelBorder
@@ -468,66 +478,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         list.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         textScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
         split.setPosition(260, ofDividerAt: 0)
-        container.addArrangedSubview(split); split.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
-        let actions = NSStackView(views: [button("Copiar texto", #selector(copyText)), button("Último resultado", #selector(showLatest)), button("Apagar histórico", #selector(clearHistory))])
+        container.addArrangedSubview(split)
+        split.widthAnchor.constraint(equalTo: container.widthAnchor, constant: -32).isActive = true
+        split.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        let actions = NSStackView(views: [button("Copy text", #selector(copyText)), button("Latest text", #selector(showLatest)), button("Clear history", #selector(clearHistory))])
         actions.spacing = 10; container.addArrangedSubview(actions)
         diskLabel.font = .systemFont(ofSize: 11); diskLabel.textColor = .secondaryLabelColor; container.addArrangedSubview(diskLabel)
-        usageLabel.font = .systemFont(ofSize: 11); usageLabel.textColor = .secondaryLabelColor; container.addArrangedSubview(usageLabel)
         return container
     }
 
     private func settingsView() -> NSView {
-        let container = stack()
-        let intro = NSTextField(wrappingLabelWithString: "Cadastre suas chaves para começar. Elas ficam no Chaves do macOS. O áudio vai à Groq; a transcrição vai ao OpenRouter para ser organizada.")
-        container.addArrangedSubview(intro)
-        permissionLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        container.addArrangedSubview(permissionLabel); refreshPermissionStatus()
-        keyLabel.font = .systemFont(ofSize: 11); container.addArrangedSubview(keyLabel)
-        groqField.placeholderString = "Chave Groq"; routerField.placeholderString = "Chave OpenRouter"
-        groqField.widthAnchor.constraint(greaterThanOrEqualToConstant: 440).isActive = true
-        routerField.widthAnchor.constraint(greaterThanOrEqualToConstant: 440).isActive = true
-        retention.addItems(withTitles: ["Não guardar", "1 dia", "7 dias", "30 dias"])
+        let container = stack(flipped: true)
+        container.spacing = 12
+        container.addArrangedSubview(sectionTitle("Preferences"))
+        retention.addItems(withTitles: ["Off", "1 day", "7 days", "30 days"])
         retention.selectItem(at: [0, 1, 7, 30].firstIndex(of: days) ?? 3)
-        fnMode.addItems(withTitles: ["Somente ⌃⌥Espaço", "Fn: segurar para falar", "Fn: apertar para começar / terminar"])
+        fnMode.addItems(withTitles: ["⌃⌥Space only", "Fn · hold to record", "Fn · press to start / stop"])
         fnMode.selectItem(at: min(fnSetting, 2))
-        budget.stringValue = String(format: "%.2f", budgetLimit); budget.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        budget.stringValue = String(format: "%.2f", budgetLimit)
+        budget.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        budget.toolTip = "Local estimate only. Set spending limits with Groq and OpenRouter too."
         let grid = NSGridView(views: [
-            [NSTextField(labelWithString: "Groq"), groqField],
-            [NSTextField(labelWithString: "OpenRouter"), routerField],
-            [NSTextField(labelWithString: "Guardar histórico por"), retention],
-            [NSTextField(labelWithString: "Atalho"), fnMode],
-            [NSTextField(labelWithString: "Teto estimado mensal (US$)"), budget]
+            [NSTextField(labelWithString: "Shortcut"), fnMode],
+            [NSTextField(labelWithString: "Keep history"), retention],
+            [NSTextField(labelWithString: "Monthly limit (USD)"), budget]
         ])
-        grid.rowSpacing = 12; grid.columnSpacing = 18; grid.yPlacement = .center
-        for row in 0..<5 { grid.row(at: row).height = 28 }
-        grid.setContentHuggingPriority(.required, for: .vertical)
-        grid.heightAnchor.constraint(equalToConstant: 188).isActive = true
+        grid.rowSpacing = 10; grid.columnSpacing = 24; grid.yPlacement = .center
         container.addArrangedSubview(grid)
         startup.state = SMAppService.mainApp.status == .enabled ? .on : .off
         container.addArrangedSubview(startup)
         pauseMusic.state = (UserDefaults.standard.object(forKey: "pauseMusic") as? Bool ?? true) ? .on : .off
+        pauseMusic.toolTip = "Resume playback manually in your music app."
         container.addArrangedSubview(pauseMusic)
-        let actions = NSStackView(views: [button("Salvar configuração", #selector(saveSettings)), button("Autorizar chaves salvas", #selector(authorizeKeys)), button("Testar inserção", #selector(testInsertion))])
-        actions.spacing = 10; container.addArrangedSubview(actions)
-        let note = NSTextField(wrappingLabelWithString: "⌃⌥Espaço significa Control + Option + Espaço e funciona como liga/desliga. Para usar Fn, desative esse atalho no Typeless e selecione “Não fazer nada” para a tecla Globo nos ajustes do teclado. Autorize Acessibilidade para inserir texto e monitorar Fn.\n\nO teto acima é uma estimativa local. Configure também os limites de cobrança nas contas Groq e OpenRouter. Modelo: Gemini 2.5 Flash Lite. Áudios: até 5 minutos, apagados após o processamento. Histórico: até 30 dias ou 10 MB; limpeza ao abrir e a cada hora.")
-        note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; container.addArrangedSubview(note)
-        let links = NSStackView(views: [button("Abrir Groq", #selector(openGroq)), button("Abrir OpenRouter", #selector(openRouter)), button("Acessibilidade", #selector(accessibility)), button("Tecla Fn do Mac", #selector(openKeyboard)), button("Pasta de dados", #selector(openData))])
-        links.spacing = 10; container.addArrangedSubview(links)
-        return container
+        let save = button("Save changes", #selector(saveSettings)); save.bezelStyle = .rounded
+        container.addArrangedSubview(save)
+        container.addArrangedSubview(sectionTitle("Connections"))
+        permissionLabel.font = .systemFont(ofSize: 12)
+        let access = NSStackView(views: [permissionLabel, accessButton,
+                                       button("Test paste", #selector(testInsertion))])
+        access.spacing = 10; access.alignment = .centerY; container.addArrangedSubview(access)
+        refreshPermissionStatus()
+        keyLabel.font = .systemFont(ofSize: 12)
+        let keys = NSStackView(views: [keyLabel, unlockKeys]); keys.spacing = 10; keys.alignment = .centerY
+        container.addArrangedSubview(keys)
+        container.addArrangedSubview(button("Edit API keys…", #selector(toggleAPIFields)))
+        apiFields.orientation = .vertical; apiFields.alignment = .leading; apiFields.spacing = 10
+        groqField.placeholderString = "Groq API key"; routerField.placeholderString = "OpenRouter API key"
+        groqField.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        routerField.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        let apiGrid = NSGridView(views: [[NSTextField(labelWithString: "Groq"), groqField],
+                                       [NSTextField(labelWithString: "OpenRouter"), routerField]])
+        apiGrid.rowSpacing = 10; apiGrid.columnSpacing = 24; apiGrid.yPlacement = .center
+        apiFields.addArrangedSubview(apiGrid)
+        let apiActions = NSStackView(views: [button("Save keys", #selector(saveSettings)),
+                                           button("Get Groq key", #selector(openGroq)), button("Get OpenRouter key", #selector(openRouter))])
+        apiActions.spacing = 10; apiFields.addArrangedSubview(apiActions)
+        apiFields.isHidden = true; container.addArrangedSubview(apiFields)
+        container.addArrangedSubview(button("More options…", #selector(toggleExtraSettings)))
+        extraSettings.orientation = .vertical; extraSettings.alignment = .leading; extraSettings.spacing = 10
+        let tools = NSStackView(views: [button("Keyboard settings", #selector(openKeyboard)), button("Open data folder", #selector(openData))])
+        tools.spacing = 10; extraSettings.addArrangedSubview(tools)
+        extraSettings.isHidden = true; container.addArrangedSubview(extraSettings)
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.drawsBackground = false
+        container.translatesAutoresizingMaskIntoConstraints = false; scroll.documentView = container
+        NSLayoutConstraint.activate([
+            container.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            container.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+        ])
+        return scroll
     }
 
-    private func stack() -> NSStackView {
-        let view = NSStackView(); view.orientation = .vertical; view.alignment = .leading; view.spacing = 14
+    private func sectionTitle(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        return label
+    }
+
+    @objc private func toggleAPIFields() {
+        editingKeys.toggle(); apiFields.isHidden = !editingKeys
+    }
+
+    @objc private func toggleExtraSettings() { extraSettings.isHidden.toggle() }
+
+    @objc private func showHelp() {
+        let alert = NSAlert(); alert.messageText = "Using FalaMac"
+        alert.informativeText = "Press your shortcut to start and stop recording. You can move to another field while speaking. If auto-paste fails, use Copy text in the floating bar, then ⌘V.\n\nTo use Fn, set “Press 🌐 key to” to “Do Nothing” in macOS Keyboard settings. Use Control + Space to switch input languages. Escape cancels an active recording.\n\nAudio is deleted after processing. History is kept for up to 30 days or 10 MB. API keys stay in macOS Keychain. Recordings are limited to 5 minutes.\n\nGroq transcribes audio; OpenRouter cleans up the text with Gemini 2.5 Flash Lite. Text stays in the language you speak. The monthly limit is a local estimate; set billing limits with both providers too."
+        alert.addButton(withTitle: "Done"); alert.runModal()
+    }
+
+    private func stack(flipped: Bool = false) -> NSStackView {
+        let view = flipped ? TopAlignedStackView() : NSStackView(); view.orientation = .vertical; view.alignment = .leading; view.spacing = 14
         view.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         return view
     }
     private func button(_ title: String, _ action: Selector) -> NSButton { NSButton(title: title, target: self, action: action) }
 
     @objc private func saveSettings() {
-        guard state == "idle" else { setMessage("Termine a gravação antes de mudar a configuração."); return }
+        guard state == "idle" else { setMessage("Finish recording before changing settings."); return }
         let normalized = budget.stringValue.replacingOccurrences(of: ",", with: ".")
         guard let amount = Double(normalized), amount.isFinite, amount >= 0.05, amount <= 100 else {
-            setMessage("Informe um teto entre US$ 0,05 e US$ 100."); return
+            setMessage("Enter a monthly limit between $0.05 and $100."); return
         }
         do {
             if !groqField.stringValue.isEmpty { try Keychain.save(groqField.stringValue, account: "groq") }
@@ -538,9 +589,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             let previousDays = days
             let newDays = [0, 1, 7, 30][max(0, retention.indexOfSelectedItem)]
             if newDays < previousDays && !history.entries.isEmpty {
-                let alert = NSAlert(); alert.messageText = "Reduzir o tempo do histórico?"
-                alert.informativeText = "Os textos fora do novo prazo serão apagados deste Mac."
-                alert.addButton(withTitle: "Aplicar"); alert.addButton(withTitle: "Cancelar")
+                let alert = NSAlert(); alert.messageText = "Keep less history?"
+                alert.informativeText = "Text older than the new retention period will be deleted from this Mac."
+                alert.addButton(withTitle: "Apply"); alert.addButton(withTitle: "Cancel")
                 guard alert.runModal() == .alertFirstButtonReturn else { retention.selectItem(at: [0, 1, 7, 30].firstIndex(of: previousDays) ?? 3); return }
             }
             try history.clean(days: newDays)
@@ -554,18 +605,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             else if startup.state == .off && SMAppService.mainApp.status != .notRegistered { try SMAppService.mainApp.unregister() }
             UserDefaults.standard.set(true, forKey: "startupConfigured")
             let requiresApproval = SMAppService.mainApp.status == .requiresApproval
-            setMessage(requiresApproval ? "Configuração salva. Autorize o FalaMac em Ajustes do Sistema → Geral → Itens de Início." : "Configuração salva. Use ⌃⌥Espaço para testar.")
+            setMessage(requiresApproval ? "Settings saved. Allow FalaMac in System Settings → General → Login Items." : "Settings saved.")
             refreshHistory()
-        } catch { setMessage("Confira a configuração: \(error.localizedDescription)") }
+        } catch { setMessage("Check your settings: \(error.localizedDescription)") }
     }
 
     private func refreshKeyPlaceholders() {
-        let unavailable = keysNeedAuthorization ? "Chave indisponível — autorize o acesso às chaves salvas" : "Cole a chave aqui"
-        groqField.placeholderString = groqKey.isEmpty ? unavailable : "Chave salva — preencha apenas para trocar"
-        routerField.placeholderString = routerKey.isEmpty ? unavailable : "Chave salva — preencha apenas para trocar"
-        keyLabel.stringValue = keysNeedAuthorization ? "Esta versão precisa de autorização para ler as chaves salvas. Clique em “Autorizar chaves salvas” quando puder usar a senha de login do Mac."
-            : "As chaves ficam protegidas no Chaves do macOS."
+        let unavailable = keysNeedAuthorization ? "Unlock saved keys first" : "Paste API key"
+        groqField.placeholderString = groqKey.isEmpty ? unavailable : "Saved · enter a key to replace it"
+        routerField.placeholderString = routerKey.isEmpty ? unavailable : "Saved · enter a key to replace it"
+        keyLabel.stringValue = keysNeedAuthorization ? "Saved keys are locked."
+            : (groqKey.isEmpty || routerKey.isEmpty ? "Add your API keys to get started." : "API keys connected.")
         keyLabel.textColor = keysNeedAuthorization ? .systemOrange : .secondaryLabelColor
+        unlockKeys.isHidden = !keysNeedAuthorization
+        if !keysNeedAuthorization && (groqKey.isEmpty || routerKey.isEmpty) { editingKeys = true }
+        apiFields.isHidden = !editingKeys
     }
 
     private func applyKeys(_ groq: Keychain.Loaded, _ router: Keychain.Loaded) {
@@ -581,7 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func authorizeKeys() {
         guard state == "idle" else { return }
-        setMessage("O macOS vai pedir acesso às chaves do FalaMac. Use a senha de login do Mac somente na janela do sistema. Você pode negar e tentar depois.")
+        setMessage("Approve the macOS Keychain prompts using your Mac login password.")
         setState("authorizing")
         workTask = Task { [weak self] in
             let values = await Task.detached {
@@ -593,8 +647,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             guard let self else { return }
             applyKeys(values.0, values.1); setState("idle")
             if !keysNeedAuthorization { Keychain.rememberAuthorization() }
-            setMessage(keysNeedAuthorization ? "Acesso às chaves não autorizado. Elas continuam guardadas no macOS; você pode autorizar depois."
-                : "Acesso às chaves verificado. Use seu atalho para gravar.")
+            setMessage(keysNeedAuthorization ? "Keys are locked. You can unlock them later in Settings."
+                : "Keys unlocked. Ready to record.")
         }
     }
 
@@ -605,9 +659,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             keyboard.setCancellationActive(state == "starting" || state == "recording")
         }
         lastAccessibilityAllowed = allowed
-        permissionLabel.stringValue = allowed ? "✓ Inserção automática autorizada pelo macOS."
-            : "Autorize Acessibilidade para o texto entrar automaticamente no campo selecionado."
+        permissionLabel.stringValue = allowed ? "Auto-paste is enabled."
+            : "Allow Accessibility to paste into other apps."
         permissionLabel.textColor = allowed ? .systemGreen : .systemOrange
+        accessButton.isHidden = allowed
     }
 
     @objc private func testInsertion() {
@@ -616,26 +671,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             setMessage(InsertionTarget.CaptureFailure.permission.rawValue)
             refreshPermissionStatus(); return
         }
-        setMessage("Teste: clique em um campo de outro app nos próximos 5 segundos. Nenhum áudio ou API será usado.")
+        setMessage("Click a text field in another app within 5 seconds. No audio or API calls.")
         setState("testing")
         workTask = Task { [weak self] in
             guard let self else { return }
             var completed = false
             defer {
                 setState("idle")
-                if completed { showResultHUD("Teste pronto · confira a colagem ou copie") }
+                if completed { showResultHUD("Test ready · check the paste or copy") }
             }
             do {
                 try await Task.sleep(nanoseconds: 5_000_000_000)
-                let sample = "Teste de inserção do FalaMac."
+                let sample = "FalaMac paste test."
                 latestText = sample; latestDate = Date(); pendingOrganization = nil; completed = true
                 let (inserted, failure) = await InsertionTarget.deliver(sample)
                 if inserted {
-                    setMessage("Teste enviado ao campo selecionado. Confira o texto no outro aplicativo.")
+                    setMessage("Test paste sent. Check the other app.")
                 } else {
-                    setMessage(failure?.rawValue ?? "O campo de teste mudou. Tente novamente mantendo o cursor no campo.")
+                    setMessage(failure?.rawValue ?? "Could not paste into this field. Try another field or use Copy text.")
                 }
-            } catch { setMessage("Teste cancelado.") }
+            } catch { setMessage("Test canceled.") }
         }
     }
 
@@ -644,8 +699,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         visibleEntries = Array(history.entries.filter { query.isEmpty || $0.text.localizedCaseInsensitiveContains(query) }.prefix(200))
         table.reloadData()
         let bytes = (try? FileManager.default.attributesOfItem(atPath: history.directory.appendingPathComponent("history.json").path)[.size] as? Int) ?? 0
-        diskLabel.stringValue = "\(history.entries.count) textos · histórico \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) / 10 MB · retenção \(days) dias. Busca em todo o histórico; lista de até 200 resultados."
-        usageLabel.stringValue = String(format: "Mês: %d gravações · %.1f min · US$ %.4f estimados / US$ %.2f. Confira a cobrança nos fornecedores.", usage.current.recordings, usage.current.seconds / 60, usage.current.dollars, budgetLimit)
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        diskLabel.stringValue = "\(history.entries.count) items · \(size) / 10 MB · \(days == 0 ? "history off" : "kept for \(days) days")"
         consumption.showLocal(usage.current, budget: budgetLimit)
     }
 
@@ -657,15 +712,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func copyLatest() {
         guard state == "idle" else { return }
-        guard !latestText.isEmpty else { setMessage("Ainda não há texto nesta sessão."); showBriefStatus("Nenhum texto pronto nesta sessão"); return }
+        guard !latestText.isEmpty else { setMessage("No text in this session yet."); showBriefStatus("No text ready yet"); return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(latestText, forType: .string)
-        unsavedText = nil; setMessage("Último texto copiado. Use ⌘V para colar no campo desejado.")
-        showResultHUD("Texto copiado · use ⌘V para colar")
+        unsavedText = nil; setMessage("Text copied. Press ⌘V to paste.")
+        showResultHUD("Copied · press ⌘V to paste")
     }
 
     private func refreshProviderUsage(force: Bool) {
         do { try usage.rollover() }
-        catch { consumption.failed("Não foi possível atualizar o resumo local."); return }
+        catch { consumption.failed("Could not update local usage."); return }
         consumption.showLocal(usage.current, budget: budgetLimit)
         guard !routerKey.isEmpty else { consumption.reset(); return }
         guard providerUsageTask == nil else { return }
@@ -700,8 +755,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard visibleEntries.indices.contains(row) else { return nil }
         let entry = visibleEntries[row]
-        let date = entry.date.formatted(date: .abbreviated, time: .shortened)
-        let quality = entry.organized == false ? " · sem organização" : ""
+        let date = entry.date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(Locale(identifier: "en_US")))
+        let quality = entry.organized == false ? " · not cleaned up" : ""
         let label = NSTextField(wrappingLabelWithString: "\(date)\(quality)\n\(entry.text.prefix(80))")
         label.font = .systemFont(ofSize: 11); label.maximumNumberOfLines = 3
         return label
@@ -714,21 +769,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func showLatest() {
         tabs.selectTabViewItem(at: 0); detail.string = latestText
-        if latestText.isEmpty { setMessage("Ainda não há resultado nesta sessão.") }
+        if latestText.isEmpty { setMessage("No result in this session yet.") }
     }
     @objc private func copyText() {
         guard !detail.string.isEmpty else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(detail.string, forType: .string)
         if detail.string == unsavedText { unsavedText = nil }
-        setMessage("Texto copiado.")
+        setMessage("Text copied.")
     }
     @objc private func clearHistory() {
-        guard state == "idle" else { setMessage("Aguarde o processamento antes de apagar o histórico."); return }
-        let alert = NSAlert(); alert.messageText = "Apagar todo o histórico local?"
-        alert.informativeText = "Esta ação também apaga o último texto mantido na memória do FalaMac. O resumo mensal de consumo será preservado."
-        alert.addButton(withTitle: "Cancelar"); alert.addButton(withTitle: "Apagar")
+        guard state == "idle" else { setMessage("Wait for processing to finish before clearing history."); return }
+        let alert = NSAlert(); alert.messageText = "Clear all history?"
+        alert.informativeText = "This also clears the latest text in this session. Monthly usage totals are kept."
+        alert.addButton(withTitle: "Cancel"); alert.addButton(withTitle: "Clear")
         guard alert.runModal() == .alertSecondButtonReturn else { return }
-        do { try history.removeAll(); detail.string = ""; latestText = ""; unsavedText = nil; pendingOrganization = nil; hud.orderOut(nil); refreshHistory(); setMessage("Histórico apagado.") }
+        do { try history.removeAll(); detail.string = ""; latestText = ""; unsavedText = nil; pendingOrganization = nil; hud.orderOut(nil); refreshHistory(); setMessage("History cleared.") }
         catch { setMessage(error.localizedDescription) }
     }
 
@@ -739,7 +794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
     @objc private func openKeyboard() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
-        setMessage("Em Teclado, altere “Press 🌐 key to” para “Do Nothing”. Isso impede a troca de idioma ao gravar com Fn.")
+        setMessage("In Keyboard settings, set “Press 🌐 key to” to “Do Nothing” to use Fn for recording.")
     }
     @objc private func openGroq() { NSWorkspace.shared.open(URL(string: "https://console.groq.com/keys")!) }
     @objc private func openRouter() { NSWorkspace.shared.open(URL(string: "https://openrouter.ai/settings/keys")!) }
@@ -747,6 +802,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     enum AppError: LocalizedError {
         case audioTooLarge
-        var errorDescription: String? { "O áudio excede o limite de tamanho e será descartado." }
+        var errorDescription: String? { "Audio exceeds the size limit and will be deleted." }
     }
+}
+
+/// A scroll document should stay at the top when optional rows are collapsed.
+@MainActor
+private final class TopAlignedStackView: NSStackView {
+    override var isFlipped: Bool { true }
 }
