@@ -6,7 +6,7 @@ A lightweight macOS dictation app: speak, let AI clean up your words, and paste 
 
 ## Download
 
-[Download the test build](https://github.com/bicalhoart/falamac/releases/tag/v0.3.0) → choose **FalaMac-0.3.0-arm64.zip** under Assets.
+[Download the test build](https://github.com/bicalhoart/falamac/releases/tag/v0.3.1) → choose **FalaMac-0.3.1-arm64.zip** under Assets.
 
 - The prebuilt app is for **Apple Silicon Macs (M1 or later), macOS 13 or newer**.
 - Unzip it and move **FalaMac.app** to **Applications** before opening it.
@@ -39,9 +39,13 @@ After an update, macOS may require Accessibility approval again. **Unlock saved 
 
 - **History:** search and copy recent dictations.
 - **Settings:** shortcuts, retention, startup, API connections, and paste testing. **Help** contains usage instructions.
-- **Usage:** a local monthly estimate and usage reported by your OpenRouter key. Key allowance is not account credit balance. Groq billing is checked on its own dashboard.
+- **Usage:** OpenRouter-reported month-to-date spend comes first. A separate month-end forecast uses reported daily averages and the remaining UTC days, excluding Groq. A legacy local estimate is available separately. Key allowance is not account credit balance. Groq billing is checked on its own dashboard.
 
-**The local monthly limit is an estimate, not a provider billing guarantee.** Set spending limits with your providers too. OpenRouter usage covers all apps sharing that key and uses UTC day/month boundaries. Failed requests may retain a conservative local cost reservation.
+**The monthly target is checked against the latest OpenRouter-reported spend, not a provider billing guarantee.** Set a spending limit on your OpenRouter key too. If the latest reported monthly spend is unavailable, the app cannot enforce a reliable local spending check. Provider data can be delayed. OpenRouter usage covers all apps sharing that key and uses UTC day/month boundaries.
+
+The forecast is reported month-to-date spend plus the average daily spend multiplied by remaining days. If all reported monthly usage occurred today, sampling starts today; otherwise, unknown earlier usage is averaged from the beginning of the UTC month. The sampling start is kept across launches for the same key and month. Zero-use days count too; today is partial, so a one-day estimate is labeled early. A new key or month resets the sample. Only a one-way key fingerprint and a few dates/amounts are stored locally in `openrouter-forecast.json`; no API key or transcript is stored there. Forecasts never include Groq rates or the old local reservations.
+
+For Groq's Whisper transcription, the published Free plan limits are 20 requests/minute, 2,000 requests/day, 7,200 audio seconds/hour, and 28,800 audio seconds/day. These are rate limits, not a monthly token allowance. Check [your account limits](https://console.groq.com/settings/limits) and [Groq's current documentation](https://console.groq.com/docs/rate-limits); account exceptions and changes may apply.
 
 ## Privacy and storage
 
@@ -58,6 +62,7 @@ FalaMac is a local Mac app with **cloud AI processing**:
 ## Current limitations
 
 - Tested on one Apple Silicon Mac. Other macOS versions, keyboard layouts, players, and editors still need testing.
+- If Accessibility is blocked, the result bar shows the reason and offers **Allow paste**. Each ad-hoc update may require renewed permission.
 - Auto-paste is best effort. Dispatching a paste shortcut does not confirm that the destination accepted it. Protected fields are excluded.
 - Music pause uses a private macOS MediaRemote command and may stop working with a system/player update. Failure does not prevent dictation.
 - Transcription and cleanup can make mistakes. Review output before using it.

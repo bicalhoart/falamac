@@ -10,3 +10,4 @@ dist/
 history.json
 usage.json
 *.app/
+openrouter-forecast.json

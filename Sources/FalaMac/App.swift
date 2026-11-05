@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let keyboard = Keyboard()
     private var history: HistoryStore!
     private var usage: UsageStore!
+    private var spendForecast: SpendForecastStore!
     private var statusItem: NSStatusItem!
     private var cleanupTimer: Timer?
     private var workTask: Task<Void, Never>?
@@ -37,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var recordingJob = UUID()
     private var briefStatusTask: Task<Void, Never>?
     private var providerUsageTask: Task<Void, Never>?
+    private var reportedRouterMonth: (Date, Double)?
     private var lastUsageRefresh: Date?
     private var lastAccessibilityAllowed = false
 
@@ -67,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var hud: NSPanel!
     private let hudLabel = NSTextField(labelWithString: "Recording…")
     private let hudMeter = NSProgressIndicator()
+    private lazy var hudAccess = NSButton(title: "Allow paste", target: self, action: #selector(accessibility))
     private lazy var hudCopy = NSButton(title: "Copy text", target: self, action: #selector(copyLatest))
     private lazy var hudRetry = NSButton(title: "Retry cleanup", target: self, action: #selector(retryOrganization))
     private lazy var hudDismiss = NSButton(title: "Close", target: self, action: #selector(dismissHUD))
@@ -76,6 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var budgetLimit: Double {
         let value = UserDefaults.standard.double(forKey: "monthlyBudget")
         return value > 0 ? value : 5
+    }
+    private var routerSpendForLimit: Double {
+        guard let (date, amount) = reportedRouterMonth else { return 0 }
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        return utc.isDate(date, equalTo: Date(), toGranularity: .month) ? amount : 0
     }
     private var fnSetting: Int { UserDefaults.standard.integer(forKey: "fnMode") }
 
@@ -89,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                                                      appropriateFor: nil, create: true).appendingPathComponent("FalaMac")
             history = try HistoryStore(directory: support)
             usage = try UsageStore(directory: support)
+            spendForecast = try SpendForecastStore(directory: support)
             recordingDir = support.appendingPathComponent("Recordings")
             try FileManager.default.createDirectory(at: recordingDir, withIntermediateDirectories: true,
                                                    attributes: [.posixPermissions: 0o700])
@@ -177,8 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             setMessage("Copy the unsaved text before recording again."); showWindow(); return
         }
         do { try usage.rollover() } catch { setMessage(error.localizedDescription); return }
-        guard usage.current.dollars + 0.014 <= budgetLimit else {
-            setMessage("Monthly estimate limit reached. Check Usage or adjust your limit in Settings.")
+        guard routerSpendForLimit + 0.01 <= budgetLimit else {
+            setMessage("OpenRouter monthly spending target reached. Check Usage or adjust your limit in Settings.")
             showWindow(); return
         }
         pendingOrganization = nil
@@ -215,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 do { try FileManager.default.removeItem(at: file) }
                 catch { setMessage("Could not delete temporary audio. Open the data folder to check.") }
                 setState("idle"); refreshHistory()
-                if hasResult { showResultHUD(feedback ?? "Text ready") }
+                if hasResult { showResultHUD(feedback ?? "Text ready"); refreshProviderUsage(force: true) }
                 else if let feedback { showBriefStatus(feedback) }
             }
             do {
@@ -261,8 +270,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     : deliveryResult.1?.rawValue ?? "Use Copy text in the floating bar."
                 setMessage(notice.isEmpty ? delivery : "\(notice) \(delivery)")
                 refreshHistory(); detail.string = result
-                feedback = organized ? (inserted ? "Cleaned up · paste sent" : "Cleaned up · ready to copy")
-                    : "Not cleaned up · original transcript"
+                if organized, deliveryResult.1 == .permission {
+                    feedback = "Auto-paste blocked · allow Accessibility"
+                } else {
+                    feedback = organized ? (inserted ? "Cleaned up · paste sent" : "Cleaned up · ready to copy")
+                        : "Not cleaned up · original transcript"
+                }
 
             } catch {
                 setMessage("Failed: \(error.localizedDescription). Temporary audio will be deleted.")
@@ -283,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         keyboard.setCancellationActive(next == "starting" || next == "recording")
         hudCancel.isHidden = next != "starting" && next != "recording"
         hudMeter.isHidden = next != "recording"
-        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true
+        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true; hudAccess.isHidden = true
         let image = next == "recording" ? "record.circle.fill" : next == "processing" ? "ellipsis.circle" : "waveform"
         statusItem?.button?.image = NSImage(systemSymbolName: image, accessibilityDescription: "FalaMac")
         statusItem?.button?.contentTintColor = next == "recording" ? .systemRed : nil
@@ -300,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private func showBriefStatus(_ text: String) {
         briefStatusTask?.cancel()
         hudCancel.isHidden = true; hudMeter.isHidden = true
-        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true
+        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true; hudAccess.isHidden = true
         hudLabel.stringValue = text; hud.orderFrontRegardless()
         briefStatusTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 2_500_000_000) }
@@ -316,7 +329,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         hudLabel.stringValue = text
         hudMeter.isHidden = true; hudCancel.isHidden = true
         hudCopy.isHidden = false; hudDismiss.isHidden = false
-        hudRetry.isHidden = pendingOrganization == nil
+        hudAccess.isHidden = AXIsProcessTrusted()
+        hudRetry.isHidden = pendingOrganization == nil || !hudAccess.isHidden
         hud.orderFrontRegardless()
         // Keep this recovery action available until copied, dismissed, or a new recording starts.
     }
@@ -330,8 +344,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             tabs.selectTabViewItem(at: 1); showWindow(); return
         }
         do { try usage.rollover() } catch { setMessage(error.localizedDescription); return }
-        guard usage.current.dollars + 0.01 <= budgetLimit else {
-            setMessage("Monthly estimate limit reached. Check Usage or adjust your limit in Settings.")
+        guard routerSpendForLimit + 0.01 <= budgetLimit else {
+            setMessage("OpenRouter monthly spending target reached. Check Usage or adjust your limit in Settings.")
             showWindow(); return
         }
         setState("processing")
@@ -412,17 +426,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         hudLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         hudMeter.isIndeterminate = false; hudMeter.minValue = 0; hudMeter.maxValue = 1
         hudMeter.style = .bar; hudMeter.setAccessibilityLabel("Microphone level")
-        for view in [hudLabel, hudMeter, hudCancel, hudCopy, hudRetry, hudDismiss] {
+        for view in [hudLabel, hudMeter, hudCancel, hudCopy, hudRetry, hudDismiss, hudAccess] {
             view.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview(view)
             view.centerYAnchor.constraint(equalTo: effect.centerYAnchor).isActive = true
         }
-        for button in [hudCancel, hudCopy, hudRetry, hudDismiss] {
+        for button in [hudCancel, hudCopy, hudRetry, hudDismiss, hudAccess] {
             button.refusesFirstResponder = true; button.bezelStyle = .rounded
         }
         // Fixed anchors keep controls still as the meter changes; hidden views retain their space.
         NSLayoutConstraint.activate([
             hudLabel.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
             hudLabel.trailingAnchor.constraint(equalTo: hudRetry.leadingAnchor, constant: -12),
+            hudAccess.leadingAnchor.constraint(equalTo: hudRetry.leadingAnchor),
+            hudAccess.trailingAnchor.constraint(equalTo: hudRetry.trailingAnchor),
             hudRetry.widthAnchor.constraint(equalToConstant: 150),
             hudRetry.trailingAnchor.constraint(equalTo: hudCopy.leadingAnchor, constant: -10),
             hudCopy.widthAnchor.constraint(equalToConstant: 112),
@@ -435,7 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             hudMeter.trailingAnchor.constraint(equalTo: hudCancel.leadingAnchor, constant: -18)
         ])
         if let screen = NSScreen.main?.visibleFrame { hud.setFrameOrigin(NSPoint(x: screen.midX - 370, y: screen.minY + 40)) }
-        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true; hudMeter.isHidden = true
+        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true; hudAccess.isHidden = true; hudMeter.isHidden = true
     }
 
     private func buildWindow() {
@@ -497,7 +513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         fnMode.selectItem(at: min(fnSetting, 2))
         budget.stringValue = String(format: "%.2f", budgetLimit)
         budget.widthAnchor.constraint(equalToConstant: 90).isActive = true
-        budget.toolTip = "Local estimate only. Set spending limits with Groq and OpenRouter too."
+        budget.toolTip = "OpenRouter target, checked against its latest reported monthly spend. Set a billing limit on your OpenRouter key too."
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Shortcut"), fnMode],
             [NSTextField(labelWithString: "Keep history"), retention],
@@ -629,8 +645,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             providerUsageTask?.cancel(); providerUsageTask = nil; lastUsageRefresh = nil
             consumption.reset(authorized: !routerKey.isEmpty)
         }
+        if oldRouterKey != routerKey { reportedRouterMonth = nil }
         keysNeedAuthorization = groq.needsAuthorization || router.needsAuthorization
         refreshKeyPlaceholders()
+        if !routerKey.isEmpty { refreshProviderUsage(force: false) }
     }
 
     @objc private func authorizeKeys() {
@@ -732,7 +750,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             do {
                 let value = try await ProviderUsageClient.fetch(key: key)
                 guard !Task.isCancelled, routerKey == key else { return }
-                let date = Date(); lastUsageRefresh = date; consumption.show(value, date: date)
+                let date = Date(); lastUsageRefresh = date
+                if let spend = value.usageMonthly { reportedRouterMonth = (date, spend) }
+                let forecast = try? spendForecast.observe(value, key: key, now: date)
+                consumption.show(value, date: date, forecast: forecast)
             } catch {
                 guard !Task.isCancelled, routerKey == key else { return }
                 consumption.failed(error.localizedDescription)

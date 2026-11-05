@@ -55,15 +55,13 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 
 ## Usage
 
-A aba **Usage**, também acessível por **Usage** no menu do ícone, consulta `GET https://openrouter.ai/api/v1/key` com a chave já cadastrada. Mostra o consumo informado pelo OpenRouter para o dia, mês e total, além do teto da chave e do restante nesse teto quando disponíveis. As consultas são somente de leitura, sem enviar áudio, transcrições ou histórico. Os dados consultados ficam apenas na memória, com data de atualização, e não são gravados no Git ou em arquivos de histórico. Consulta ao abrir a aba (com intervalo mínimo de um minuto), ou ao clicar em Refresh.
+O valor principal vem da API do OpenRouter: gasto real informado para o mês, com data da consulta e aviso de possível atraso. Hoje, total da chave e limite restante aparecem separados. O limite da chave não é o saldo da conta.
 
-O consumo da API cobre todos os usos desta chave, inclusive em outros apps, e segue janelas UTC. Não é somado novamente à estimativa local. O restante do teto da chave não é o saldo da conta. A consulta do saldo total exige chave administrativa, que esta versão não solicita; há um botão para abrir o saldo no site do OpenRouter. Para a Groq, usa a estimativa local e oferece acesso ao painel oficial, pois não foi encontrada consulta pública de cobrança com a chave de inferência comum. Valores exibidos em US$; o plano gratuito Groq pode não gerar cobrança, mesmo quando existe estimativa de custo equivalente.
+A projeção de fim de mês usa somente OpenRouter: gasto informado até agora + média por dia × dias restantes em UTC. Se todo o gasto ocorreu hoje, a amostra começa hoje; se houver gasto anterior sem datas conhecidas, usa os dias do mês até agora. Mantém o início da amostra entre aberturas, conta dias sem uso e sinaliza a estimativa inicial de um dia. Trocar a chave ou o mês reinicia a amostra. O arquivo local `openrouter-forecast.json` guarda apenas um hash da chave, datas e valores, sem a chave nem transcrições.
 
-O painel mostra uma estimativa mensal e impede novas gravações perto do teto escolhido, inicialmente US$ 5. A transcrição considera mínimo de 10 segundos a US$ 0,04/h. Para organização, usa `google/gemini-2.5-flash-lite` e o custo informado pelo OpenRouter, ou uma estimativa por tokens quando o custo não estiver disponível. Falhas podem manter uma reserva conservadora de US$ 0,01 para a organização.
+Groq e reservas antigas ficam fora da projeção e da comparação com a meta mensal. A estimativa local antiga continua recolhida, identificada como não sendo cobrança real. A meta usa o último gasto mensal informado pelo OpenRouter; se a consulta estiver indisponível ou atrasada, não há garantia de bloqueio exato. Configure também o limite da chave no fornecedor.
 
-**Esse controle local não substitui os limites de cobrança dos fornecedores.** Tarifas, taxas, impostos, uso por outras ferramentas e falhas de rede podem causar divergências. O modelo é fixo nesta versão para manter a estimativa coerente. O resumo mensal guarda apenas contagens e valores, independentemente da limpeza do histórico.
-
-Referências verificadas no início do projeto: [Groq Speech-to-Text](https://console.groq.com/docs/speech-to-text), [modelo OpenRouter](https://openrouter.ai/google/gemini-2.5-flash-lite), [limites OpenRouter](https://openrouter.ai/docs/api/reference/limits), [início automático no macOS](https://developer.apple.com/documentation/servicemanagement/smappservice).
+No Free do Groq, Whisper tem cotas publicadas de 20 chamadas/minuto, 2.000 chamadas/dia, 7.200 segundos de áudio/hora e 28.800 segundos/dia. Isso não é uma franquia mensal em tokens; confira o [limite da sua conta](https://console.groq.com/settings/limits). Quando Acessibilidade estiver bloqueada, a barrinha informa o motivo e oferece **Allow paste**.
 
 ## Desenvolvimento e verificação
 

@@ -20,7 +20,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         path = PurePosixPath(entry.filename)
         if path.is_absolute() or ".." in path.parts:
             print("Unsafe archive path"); failed = True
-        if path.name in {"history.json", "usage.json", ".env", ".DS_Store"} or path.suffix in {".m4a", ".wav"}:
+        if path.name in {"history.json", "usage.json", "openrouter-forecast.json", ".env", ".DS_Store"} or path.suffix in {".m4a", ".wav"}:
             print(f"Local data file: {path.name}"); failed = True
         for label, pattern in patterns.items():
             if re.search(pattern, archive.read(entry)):
