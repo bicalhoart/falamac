@@ -48,6 +48,19 @@ public final class UsageStore {
         try save()
     }
 
+    public func reserveRewrite() throws -> Reservation {
+        try rollover()
+        current.dollars += 0.01
+        try save()
+        return Reservation(dollars: 0.01, month: current.month)
+    }
+
+    public func settleRewrite(reserved: Reservation, cost: Double) throws {
+        guard current.month == reserved.month else { return }
+        current.dollars = max(0, current.dollars - reserved.dollars + cost)
+        try save()
+    }
+
     private func save() throws {
         try JSONEncoder().encode(current).write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)

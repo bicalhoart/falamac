@@ -80,6 +80,46 @@ struct FalaCoreTests {
         expectEqual(loaded.current.recordings, 0)
     }
 
+    @Test func retryReplacesRawEntryWithoutDuplicatingOrResettingRetention() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let history = try HistoryStore(directory: directory)
+        let raw = Entry(date: Date().addingTimeInterval(-86400), text: "cinco não três", seconds: 3, organized: false)
+        try history.add(raw, days: 30)
+        let organized = Entry(id: raw.id, date: raw.date, text: "Três.", seconds: raw.seconds, organized: true)
+        try history.add(organized, days: 30)
+        let loaded = try HistoryStore(directory: directory)
+        #expect(loaded.entries == [organized])
+        try history.clean(days: 1)
+        #expect(history.entries.isEmpty)
+    }
+
+    @Test func olderHistoryStillLoadsWithoutOrganizationFlag() throws {
+        let entry = Entry(text: "texto antigo", seconds: 1)
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(entry)) as? [String: Any])
+        json.removeValue(forKey: "organized")
+        let decoded = try JSONDecoder().decode(Entry.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded.text == entry.text)
+        #expect(decoded.organized == nil)
+    }
+
+    @Test func retryOnlyChargesRewriteWithoutRecordingAudioAgain() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let usage = try UsageStore(directory: directory)
+        let first = try usage.reserve(seconds: 20)
+        try usage.settle(reserved: first, seconds: 20, rewriteCost: 0)
+        let before = usage.current
+        let retry = try usage.reserveRewrite()
+        #expect(abs(usage.current.dollars - before.dollars - 0.01) < 0.0000001)
+        try usage.settleRewrite(reserved: retry, cost: 0.002)
+        let loaded = try UsageStore(directory: directory)
+        #expect(loaded.current.recordings == before.recordings)
+        #expect(loaded.current.seconds == before.seconds)
+        #expect(abs(loaded.current.dollars - before.dollars - 0.002) < 0.0000001)
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("FalaMacTests-\(UUID().uuidString)")
     }

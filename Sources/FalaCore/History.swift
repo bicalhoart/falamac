@@ -5,9 +5,11 @@ public struct Entry: Codable, Identifiable, Equatable {
     public let date: Date
     public let text: String
     public let seconds: Double
+    /// nil for entries saved by older versions.
+    public let organized: Bool?
 
-    public init(id: UUID = UUID(), date: Date = Date(), text: String, seconds: Double) {
-        self.id = id; self.date = date; self.text = text; self.seconds = seconds
+    public init(id: UUID = UUID(), date: Date = Date(), text: String, seconds: Double, organized: Bool? = nil) {
+        self.id = id; self.date = date; self.text = text; self.seconds = seconds; self.organized = organized
     }
 }
 
@@ -50,7 +52,7 @@ public final class HistoryStore {
     }
 
     public func add(_ entry: Entry, days: Int) throws {
-        try persist(Retention.prune([entry] + entries, days: days))
+        try persist(Retention.prune([entry] + entries.filter { $0.id != entry.id }, days: days))
     }
 
     public func removeAll() throws { try persist([]) }

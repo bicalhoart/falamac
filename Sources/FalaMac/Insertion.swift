@@ -12,12 +12,20 @@ struct InsertionTarget {
     enum CaptureFailure: String {
         case permission = "Autorize o FalaMac em Ajustes do Sistema → Privacidade e Segurança → Acessibilidade para inserir o texto automaticamente."
         case noField = "Não foi encontrado um campo de texto editável. O resultado está disponível para copiar."
-        case ownWindow = "A gravação começou na janela do FalaMac. Selecione o campo de outro app antes de gravar."
+        case ownWindow = "O FalaMac está em primeiro plano. Use Copiar texto e cole no campo desejado."
     }
 
     /// Always resolve the field at delivery time. Never keep a recording-start
     /// target: moving to another input while dictating is intentional.
     static func deliver(_ text: String) async -> (Bool, CaptureFailure?) {
+        // Resolve focus only AFTER releasing the shortcut. Editors can recreate
+        // their AX nodes or move focus during this interval.
+        let modifiers: CGEventFlags = [.maskSecondaryFn, .maskControl, .maskAlternate, .maskCommand, .maskShift]
+        for _ in 0..<25 {
+            if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { break }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        guard !Task.isCancelled else { return (false, nil) }
         let (field, failure) = await prepare()
         guard let field else { return (false, failure) }
         return (await field.insert(text), nil)
@@ -25,16 +33,16 @@ struct InsertionTarget {
 
     static func prepare() async -> (InsertionTarget?, CaptureFailure?) {
         guard AXIsProcessTrusted() else { return (nil, .permission) }
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return (nil, .ownWindow) }
-        let application = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(application, 0.3)
-        // https://www.electronjs.org/docs/latest/tutorial/accessibility
-        AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        for attempt in 0..<4 {
+        for attempt in 0..<6 {
+            guard let app = NSWorkspace.shared.frontmostApplication,
+                  app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return (nil, .ownWindow) }
+            let application = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(application, 0.3)
+            // https://www.electronjs.org/docs/latest/tutorial/accessibility
+            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
             if let result = capture(), result.pid == app.processIdentifier { return (result, nil) }
             guard !Task.isCancelled else { return (nil, .noField) }
-            if attempt < 3 { try? await Task.sleep(nanoseconds: 100_000_000) }
+            if attempt < 5 { try? await Task.sleep(nanoseconds: 100_000_000) }
         }
         return (nil, .noField)
     }
@@ -44,7 +52,13 @@ struct InsertionTarget {
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.3)
-        guard let focused = elementAttribute(application, kAXFocusedUIElementAttribute), !protectedField(focused) else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.3)
+        let globalFocused = elementAttribute(system, kAXFocusedUIElementAttribute)
+        var focusedPID: pid_t = 0
+        if let globalFocused { AXUIElementGetPid(globalFocused, &focusedPID) }
+        guard let focused = (focusedPID == app.processIdentifier ? globalFocused : nil)
+                ?? elementAttribute(application, kAXFocusedUIElementAttribute), !protectedField(focused) else { return nil }
         var field: AXUIElement? = accepts(focused) ? focused : nil
         var ancestor = focused
         for _ in 0..<3 where field == nil {
@@ -63,12 +77,7 @@ struct InsertionTarget {
     }
 
     func insert(_ text: String) async -> Bool {
-        // Wait for Fn/Option release to avoid turning Command+V into another shortcut.
         let modifiers: CGEventFlags = [.maskSecondaryFn, .maskControl, .maskAlternate, .maskCommand, .maskShift]
-        for _ in 0..<15 {
-            if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { break }
-            try? await Task.sleep(nanoseconds: 40_000_000)
-        }
         guard let current = Self.capture(), matches(current),
               CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty else { return false }
         // Paste produces the input/change events required by web and Electron editors.
@@ -88,7 +97,9 @@ struct InsertionTarget {
         down.post(tap: .cgSessionEventTap)
         try? await Task.sleep(nanoseconds: 25_000_000)
         up.post(tap: .cgSessionEventTap)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        // Some editors consume the clipboard asynchronously. Leave enough time
+        // for a busy destination; explicit copying changes changeCount and wins.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             guard board.changeCount == change else { return }
             board.clearContents(); board.writeObjects(previous)
         }

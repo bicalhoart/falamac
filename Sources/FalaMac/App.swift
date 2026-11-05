@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var latestText = ""
     private var unsavedText: String?
     private var latestDate: Date?
+    private var pendingOrganization: Entry?
     private var recordingJob = UUID()
     private var briefStatusTask: Task<Void, Never>?
     private var providerUsageTask: Task<Void, Never>?
@@ -61,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var visibleEntries: [Entry] = []
     private var hud: NSPanel!
     private let hudLabel = NSTextField(labelWithString: "Gravando…")
+    private let hudMeter = NSProgressIndicator()
+    private lazy var hudCopy = NSButton(title: "Copiar texto", target: self, action: #selector(copyLatest))
+    private lazy var hudRetry = NSButton(title: "Organizar de novo", target: self, action: #selector(retryOrganization))
+    private lazy var hudDismiss = NSButton(title: "Fechar", target: self, action: #selector(dismissHUD))
     private lazy var hudCancel = NSButton(title: "Cancelar · Esc", target: self, action: #selector(cancelRecording))
 
     private var days: Int { UserDefaults.standard.object(forKey: "retentionDays") as? Int ?? 30 }
@@ -111,8 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         recorder.onLimit = { [weak self] in self?.finishRecording() }
         recorder.onFailure = { [weak self] in self?.cancelRecording(); self?.setMessage("Falha na gravação. O áudio temporário foi descartado.") }
         recorder.level = { [weak self] power in
-            let bars = String(repeating: "▰", count: max(1, min(12, Int((power + 55) / 5))))
-            self?.hudLabel.stringValue = "● Gravando  \(bars)"
+            self?.hudMeter.doubleValue = Double(max(0, min(1, (power + 55) / 55)))
         }
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -173,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             setMessage("Limite mensal estimado atingido. Confira os gastos nos fornecedores ou ajuste o teto em Configuração.")
             showWindow(); return
         }
+        pendingOrganization = nil
         releasePending = false; setState("starting")
         let job = UUID(); recordingJob = job
         workTask = Task { [weak self] in
@@ -201,11 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         workTask = Task { [weak self] in
             guard let self else { return }
             var feedback: String?
+            var hasResult = false
             defer {
                 do { try FileManager.default.removeItem(at: file) }
                 catch { setMessage("Não foi possível apagar o áudio temporário. Abra a pasta de dados para revisar.") }
                 setState("idle"); refreshHistory()
-                if let feedback { showBriefStatus(feedback) }
+                if hasResult { showResultHUD(feedback ?? "Texto pronto") }
+                else if let feedback { showBriefStatus(feedback) }
             }
             do {
                 let audio = try Data(contentsOf: file)
@@ -216,37 +223,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                 // Keep the transcript before the second network request, so rewrite failures never lose it.
                 latestText = raw; unsavedText = raw; latestDate = Date()
                 var result = raw
+                var organized = false
                 var notice = ""
+                var rewriteCost: Double?
                 if !routerKey.isEmpty {
                     do {
                         let rewritten = try await AIClient.rewrite(text: raw, key: routerKey)
-                        result = rewritten.text
-                        try usage.settle(reserved: reserved, seconds: seconds, rewriteCost: rewritten.cost)
+                        result = rewritten.text; organized = true; rewriteCost = rewritten.cost
                     } catch {
-                        notice = "A organização falhou; a transcrição original está disponível. \(error.localizedDescription)"
+                        notice = "A organização falhou. A transcrição original foi preservada. \(error.localizedDescription)"
                     }
                 } else {
-                    try usage.settle(reserved: reserved, seconds: seconds, rewriteCost: 0)
-                    notice = "Transcrição pronta. Cadastre a chave OpenRouter para organizar a fala."
+                    rewriteCost = 0
+                    notice = "Transcrição sem organização. Autorize ou cadastre a chave OpenRouter em Configuração."
                 }
-                latestText = result; unsavedText = result
+                // Local accounting failures must not discard a successful rewrite or prevent delivery.
+                if let rewriteCost {
+                    do { try usage.settle(reserved: reserved, seconds: seconds, rewriteCost: rewriteCost) }
+                    catch { notice += " Não foi possível atualizar a estimativa local de consumo." }
+                }
+                latestText = result; unsavedText = result; hasResult = true
+                let entry = Entry(text: result, seconds: seconds, organized: organized)
+                pendingOrganization = organized ? nil : entry
                 do {
-                    try history.add(Entry(text: result, seconds: seconds), days: days)
+                    try history.add(entry, days: days)
                     if days > 0 { unsavedText = nil }
-                } catch { notice = "Texto pronto, mas não foi possível salvar o histórico: \(error.localizedDescription)" }
-                // A failed rewrite is reviewable in the window, never pasted without review.
-                // Resolve the destination now, after processing. The user may have
-                // moved to another field or app since the recording started.
-                let deliveryResult = notice.isEmpty ? await InsertionTarget.deliver(result) : (false, nil)
+                } catch { notice += " Texto pronto, mas não foi possível salvar o histórico: \(error.localizedDescription)" }
+                // Never paste an unorganized fallback silently. Focus discovery is independent of rewriting.
+                let deliveryResult = organized ? await InsertionTarget.deliver(result) : (false, nil)
                 let inserted = deliveryResult.0
                 if inserted { unsavedText = nil }
-                let delivery = inserted ? "Texto enviado ao campo ativo. Confira o resultado no aplicativo."
-                    : deliveryResult.1?.rawValue ?? "Não foi possível inserir no campo atual. O texto está pronto para copiar."
+                let delivery = inserted ? "Colagem enviada ao campo ativo. Se não aparecer, use Copiar texto na barrinha."
+                    : deliveryResult.1?.rawValue ?? "O texto está disponível em Copiar texto na barrinha."
                 setMessage(notice.isEmpty ? delivery : "\(notice) \(delivery)")
-                if !inserted {
-                    refreshHistory(); detail.string = result
-                    feedback = notice.isEmpty ? "Texto pronto · copie pelo ícone do FalaMac" : "Confira o resultado no FalaMac"
-                }
+                refreshHistory(); detail.string = result
+                feedback = organized ? (inserted ? "Texto organizado · colagem enviada" : "Texto organizado · pronto para copiar")
+                    : "Sem organização · transcrição original"
+
             } catch {
                 setMessage("Falha: \(error.localizedDescription). O áudio temporário será apagado.")
                 feedback = "Não foi possível transcrever · detalhes no ícone do FalaMac"
@@ -265,6 +278,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         state = next
         keyboard.setCancellationActive(next == "starting" || next == "recording")
         hudCancel.isHidden = next != "starting" && next != "recording"
+        hudMeter.isHidden = next != "recording"
+        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true
         let image = next == "recording" ? "record.circle.fill" : next == "processing" ? "ellipsis.circle" : "waveform"
         statusItem?.button?.image = NSImage(systemSymbolName: image, accessibilityDescription: "FalaMac")
         statusItem?.button?.contentTintColor = next == "recording" ? .systemRed : nil
@@ -280,12 +295,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func showBriefStatus(_ text: String) {
         briefStatusTask?.cancel()
-        hudCancel.isHidden = true; hudLabel.stringValue = text; hud.orderFrontRegardless()
+        hudCancel.isHidden = true; hudMeter.isHidden = true
+        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true
+        hudLabel.stringValue = text; hud.orderFrontRegardless()
         briefStatusTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 2_500_000_000) }
             catch { return }
             guard let self, state == "idle" else { return }
             hud.orderOut(nil)
+        }
+    }
+
+    private func showResultHUD(_ text: String) {
+        guard state == "idle" else { return }
+        briefStatusTask?.cancel(); briefStatusTask = nil
+        hudLabel.stringValue = text
+        hudMeter.isHidden = true; hudCancel.isHidden = true
+        hudCopy.isHidden = false; hudDismiss.isHidden = false
+        hudRetry.isHidden = pendingOrganization == nil
+        hud.orderFrontRegardless()
+        // Keep this recovery action available until copied, dismissed, or a new recording starts.
+    }
+
+    @objc private func dismissHUD() { hud.orderOut(nil) }
+
+    @objc private func retryOrganization() {
+        guard state == "idle", let entry = pendingOrganization else { return }
+        guard !routerKey.isEmpty else {
+            setMessage("Autorize ou cadastre a chave OpenRouter em Configuração para organizar esta transcrição.")
+            tabs.selectTabViewItem(at: 1); showWindow(); return
+        }
+        do { try usage.rollover() } catch { setMessage(error.localizedDescription); return }
+        guard usage.current.dollars + 0.01 <= budgetLimit else {
+            setMessage("Limite mensal estimado atingido. Confira Consumo ou ajuste o teto em Configuração.")
+            showWindow(); return
+        }
+        setState("processing")
+        workTask = Task { [weak self] in
+            guard let self else { return }
+            var feedback = "Sem organização · tente novamente"
+            defer { setState("idle"); refreshHistory(); showResultHUD(feedback) }
+            do {
+                let reservation = try usage.reserveRewrite()
+                let rewritten = try await AIClient.rewrite(text: entry.text, key: routerKey)
+                latestText = rewritten.text; unsavedText = rewritten.text; pendingOrganization = nil
+                let updated = Entry(id: entry.id, date: entry.date, text: rewritten.text, seconds: entry.seconds, organized: true)
+                var notice = "Texto organizado. Use Copiar texto na barrinha para colar onde quiser."
+                do { try usage.settleRewrite(reserved: reservation, cost: rewritten.cost) }
+                catch { notice += " Não foi possível atualizar a estimativa local de consumo." }
+                do {
+                    try history.add(updated, days: days)
+                    if days > 0 { unsavedText = nil }
+                } catch { notice += " Não foi possível atualizar o histórico local." }
+                detail.string = rewritten.text; setMessage(notice)
+                feedback = "Texto organizado · pronto para copiar"
+            } catch { setMessage("A organização falhou. A transcrição continua disponível. \(error.localizedDescription)") }
         }
     }
 
@@ -328,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
 
     private func buildHUD() {
-        hud = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 56),
+        hud = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 56),
                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         hud.level = .floating; hud.isOpaque = false; hud.backgroundColor = .clear
         hud.ignoresMouseEvents = false; hud.becomesKeyOnlyIfNeeded = true; hud.hidesOnDeactivate = false
@@ -341,12 +405,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         hud.contentView = effect
         hudLabel.textColor = .white; hudLabel.font = .systemFont(ofSize: 13, weight: .medium)
         hudLabel.lineBreakMode = .byTruncatingTail
-        hudCancel.refusesFirstResponder = true; hudCancel.bezelStyle = .rounded
-        let row = NSStackView(views: [hudLabel, hudCancel]); row.spacing = 18; row.alignment = .centerY
-        row.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview(row)
-        NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
-            row.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -16), row.centerYAnchor.constraint(equalTo: effect.centerYAnchor)])
-        if let screen = NSScreen.main?.visibleFrame { hud.setFrameOrigin(NSPoint(x: screen.midX - 270, y: screen.minY + 40)) }
+        hudLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        hudMeter.isIndeterminate = false; hudMeter.minValue = 0; hudMeter.maxValue = 1
+        hudMeter.style = .bar; hudMeter.setAccessibilityLabel("Volume do microfone")
+        for view in [hudLabel, hudMeter, hudCancel, hudCopy, hudRetry, hudDismiss] {
+            view.translatesAutoresizingMaskIntoConstraints = false; effect.addSubview(view)
+            view.centerYAnchor.constraint(equalTo: effect.centerYAnchor).isActive = true
+        }
+        for button in [hudCancel, hudCopy, hudRetry, hudDismiss] {
+            button.refusesFirstResponder = true; button.bezelStyle = .rounded
+        }
+        // Fixed anchors keep controls still as the meter changes; hidden views retain their space.
+        NSLayoutConstraint.activate([
+            hudLabel.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
+            hudLabel.trailingAnchor.constraint(equalTo: hudRetry.leadingAnchor, constant: -12),
+            hudRetry.widthAnchor.constraint(equalToConstant: 150),
+            hudRetry.trailingAnchor.constraint(equalTo: hudCopy.leadingAnchor, constant: -10),
+            hudCopy.widthAnchor.constraint(equalToConstant: 112),
+            hudCopy.trailingAnchor.constraint(equalTo: hudDismiss.leadingAnchor, constant: -10),
+            hudDismiss.widthAnchor.constraint(equalToConstant: 65),
+            hudDismiss.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -16),
+            hudCancel.trailingAnchor.constraint(equalTo: effect.trailingAnchor, constant: -16),
+            hudCancel.widthAnchor.constraint(equalToConstant: 130),
+            hudMeter.widthAnchor.constraint(equalToConstant: 100),
+            hudMeter.trailingAnchor.constraint(equalTo: hudCancel.leadingAnchor, constant: -18)
+        ])
+        if let screen = NSScreen.main?.visibleFrame { hud.setFrameOrigin(NSPoint(x: screen.midX - 370, y: screen.minY + 40)) }
+        hudCopy.isHidden = true; hudRetry.isHidden = true; hudDismiss.isHidden = true; hudMeter.isHidden = true
     }
 
     private func buildWindow() {
@@ -535,15 +620,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         setState("testing")
         workTask = Task { [weak self] in
             guard let self else { return }
-            defer { setState("idle") }
+            var completed = false
+            defer {
+                setState("idle")
+                if completed { showResultHUD("Teste pronto · confira a colagem ou copie") }
+            }
             do {
                 try await Task.sleep(nanoseconds: 5_000_000_000)
-                let (inserted, failure) = await InsertionTarget.deliver("Teste de inserção do FalaMac.")
+                let sample = "Teste de inserção do FalaMac."
+                latestText = sample; latestDate = Date(); pendingOrganization = nil; completed = true
+                let (inserted, failure) = await InsertionTarget.deliver(sample)
                 if inserted {
                     setMessage("Teste enviado ao campo selecionado. Confira o texto no outro aplicativo.")
                 } else {
                     setMessage(failure?.rawValue ?? "O campo de teste mudou. Tente novamente mantendo o cursor no campo.")
-                    showWindow()
                 }
             } catch { setMessage("Teste cancelado.") }
         }
@@ -566,9 +656,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func showConsumption() { tabs.selectTabViewItem(at: 2); showWindow() }
 
     @objc private func copyLatest() {
+        guard state == "idle" else { return }
         guard !latestText.isEmpty else { setMessage("Ainda não há texto nesta sessão."); showBriefStatus("Nenhum texto pronto nesta sessão"); return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(latestText, forType: .string)
-        unsavedText = nil; setMessage("Último texto copiado."); showBriefStatus("Último texto copiado")
+        unsavedText = nil; setMessage("Último texto copiado. Use ⌘V para colar no campo desejado.")
+        showResultHUD("Texto copiado · use ⌘V para colar")
     }
 
     private func refreshProviderUsage(force: Bool) {
@@ -596,7 +688,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private func expireSessionText() {
         if let latestDate, latestDate < Date().addingTimeInterval(-Double(max(1, days)) * 86400) {
-            latestText = ""; unsavedText = nil; self.latestDate = nil
+            latestText = ""; unsavedText = nil; pendingOrganization = nil; self.latestDate = nil
+            if state == "idle" { hud.orderOut(nil) }
         }
         if let selected = visibleEntries.indices.contains(table.selectedRow) ? visibleEntries[table.selectedRow] : nil,
            !history.entries.contains(where: { $0.id == selected.id }) { detail.string = "" }
@@ -608,7 +701,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         guard visibleEntries.indices.contains(row) else { return nil }
         let entry = visibleEntries[row]
         let date = entry.date.formatted(date: .abbreviated, time: .shortened)
-        let label = NSTextField(wrappingLabelWithString: "\(date)\n\(entry.text.prefix(80))")
+        let quality = entry.organized == false ? " · sem organização" : ""
+        let label = NSTextField(wrappingLabelWithString: "\(date)\(quality)\n\(entry.text.prefix(80))")
         label.font = .systemFont(ofSize: 11); label.maximumNumberOfLines = 3
         return label
     }
@@ -634,7 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         alert.informativeText = "Esta ação também apaga o último texto mantido na memória do FalaMac. O resumo mensal de consumo será preservado."
         alert.addButton(withTitle: "Cancelar"); alert.addButton(withTitle: "Apagar")
         guard alert.runModal() == .alertSecondButtonReturn else { return }
-        do { try history.removeAll(); detail.string = ""; latestText = ""; unsavedText = nil; refreshHistory(); setMessage("Histórico apagado.") }
+        do { try history.removeAll(); detail.string = ""; latestText = ""; unsavedText = nil; pendingOrganization = nil; hud.orderOut(nil); refreshHistory(); setMessage("Histórico apagado.") }
         catch { setMessage(error.localizedDescription) }
     }
 
