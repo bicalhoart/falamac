@@ -12,7 +12,7 @@ final class Recorder: NSObject, AVAudioRecorderDelegate {
     var onFailure: (() -> Void)?
     var level: ((Float) -> Void)?
 
-    func start(directory: URL) async throws {
+    func start(directory: URL, beforeRecording: () -> Void = {}) async throws {
         let allowed = await AVCaptureDevice.requestAccess(for: .audio)
         try Task.checkCancellation()
         guard allowed else { throw RecordError.permission }
@@ -27,6 +27,7 @@ final class Recorder: NSObject, AVAudioRecorderDelegate {
         ])
         recorder = audio; peak = -160
         audio.delegate = self; audio.isMeteringEnabled = true
+        beforeRecording()
         guard audio.record(forDuration: 300) else { cancel(); throw RecordError.start }
         startedAt = ProcessInfo.processInfo.systemUptime
         meter = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in

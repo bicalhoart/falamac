@@ -10,7 +10,7 @@ enum Main {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.setActivationPolicy(.accessory)
+        app.setActivationPolicy(.regular)
         withExtendedLifetime(delegate) { app.run() }
     }
 }
@@ -24,8 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var statusItem: NSStatusItem!
     private var cleanupTimer: Timer?
     private var workTask: Task<Void, Never>?
-    private var target: InsertionTarget?
-    private var captureFailure: InsertionTarget.CaptureFailure?
     private var state = "idle"
     private var releasePending = false
     private var recordingDir: URL!
@@ -58,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let retention = NSPopUpButton()
     private let fnMode = NSPopUpButton()
     private let startup = NSButton(checkboxWithTitle: "Abrir ao entrar no Mac", target: nil, action: nil)
+    private let pauseMusic = NSButton(checkboxWithTitle: "Pausar música ao gravar · retomar manualmente no player", target: nil, action: nil)
     private let budget = NSTextField(string: "5")
     private var visibleEntries: [Entry] = []
     private var hud: NSPanel!
@@ -133,6 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         showWindow(); return true
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
     func applicationDidBecomeActive(_ notification: Notification) { refreshPermissionStatus() }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -177,9 +178,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         workTask = Task { [weak self] in
             guard let self else { return }
             do {
-                (target, captureFailure) = await InsertionTarget.prepare()
-                try Task.checkCancellation()
-                try await recorder.start(directory: recordingDir)
+                try await recorder.start(directory: recordingDir) {
+                    if UserDefaults.standard.object(forKey: "pauseMusic") as? Bool ?? true { SystemMedia.pause() }
+                }
                 try Task.checkCancellation()
                 setState("recording")
                 if releasePending { finishRecording() }
@@ -234,12 +235,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
                     if days > 0 { unsavedText = nil }
                 } catch { notice = "Texto pronto, mas não foi possível salvar o histórico: \(error.localizedDescription)" }
                 // A failed rewrite is reviewable in the window, never pasted without review.
-                let inserted: Bool
-                if notice.isEmpty, let target { inserted = await target.insert(result) }
-                else { inserted = false }
+                // Resolve the destination now, after processing. The user may have
+                // moved to another field or app since the recording started.
+                let deliveryResult = notice.isEmpty ? await InsertionTarget.deliver(result) : (false, nil)
+                let inserted = deliveryResult.0
                 if inserted { unsavedText = nil }
                 let delivery = inserted ? "Texto enviado ao campo ativo. Confira o resultado no aplicativo."
-                    : captureFailure?.rawValue ?? "O campo selecionado mudou durante o processamento. O texto está pronto na janela para copiar."
+                    : deliveryResult.1?.rawValue ?? "Não foi possível inserir no campo atual. O texto está pronto para copiar."
                 setMessage(notice.isEmpty ? delivery : "\(notice) \(delivery)")
                 if !inserted {
                     refreshHistory(); detail.string = result
@@ -418,6 +420,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         container.addArrangedSubview(grid)
         startup.state = SMAppService.mainApp.status == .enabled ? .on : .off
         container.addArrangedSubview(startup)
+        pauseMusic.state = (UserDefaults.standard.object(forKey: "pauseMusic") as? Bool ?? true) ? .on : .off
+        container.addArrangedSubview(pauseMusic)
         let actions = NSStackView(views: [button("Salvar configuração", #selector(saveSettings)), button("Autorizar chaves salvas", #selector(authorizeKeys)), button("Testar inserção", #selector(testInsertion))])
         actions.spacing = 10; container.addArrangedSubview(actions)
         let note = NSTextField(wrappingLabelWithString: "⌃⌥Espaço significa Control + Option + Espaço e funciona como liga/desliga. Para usar Fn, desative esse atalho no Typeless e selecione “Não fazer nada” para a tecla Globo nos ajustes do teclado. Autorize Acessibilidade para inserir texto e monitorar Fn.\n\nO teto acima é uma estimativa local. Configure também os limites de cobrança nas contas Groq e OpenRouter. Modelo: Gemini 2.5 Flash Lite. Áudios: até 5 minutos, apagados após o processamento. Histórico: até 30 dias ou 10 MB; limpeza ao abrir e a cada hora.")
@@ -458,6 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             UserDefaults.standard.set(newDays, forKey: "retentionDays")
             expireSessionText()
             UserDefaults.standard.set(amount, forKey: "monthlyBudget")
+            UserDefaults.standard.set(pauseMusic.state == .on, forKey: "pauseMusic")
             UserDefaults.standard.set(fnMode.indexOfSelectedItem, forKey: "fnMode")
             keyboard.enableFn(fnSetting > 0)
             if startup.state == .on && SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
@@ -533,8 +538,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             defer { setState("idle") }
             do {
                 try await Task.sleep(nanoseconds: 5_000_000_000)
-                let (field, failure) = await InsertionTarget.prepare()
-                if let field, await field.insert("Teste de inserção do FalaMac.") {
+                let (inserted, failure) = await InsertionTarget.deliver("Teste de inserção do FalaMac.")
+                if inserted {
                     setMessage("Teste enviado ao campo selecionado. Confira o texto no outro aplicativo.")
                 } else {
                     setMessage(failure?.rawValue ?? "O campo de teste mudou. Tente novamente mantendo o cursor no campo.")

@@ -1,6 +1,6 @@
 # FalaMac
 
-Aplicativo pessoal para macOS 13 ou superior. Grava pelo atalho, transcreve com Groq, organiza o texto com OpenRouter e tenta inserir no campo que estava ativo. Sem servidor, telemetria, modelos locais ou dependências externas de compilação.
+Aplicativo pessoal para macOS 13 ou superior. Grava pelo atalho, transcreve com Groq, organiza o texto com OpenRouter e tenta inserir no campo selecionado no momento da entrega. Sem servidor, telemetria, modelos locais ou dependências externas de compilação.
 
 ## Compilar e abrir
 
@@ -21,7 +21,7 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 4. Cole as chaves nos campos protegidos do aplicativo e salve. Elas ficam no Chaves do macOS. Não coloque chaves no código, no GitHub ou no chat.
    Atualizações da versão pessoal podem pedir novamente acesso às chaves. O aplicativo não mostra esse pedido automaticamente ao abrir: use **Autorizar chaves salvas**. A senha solicitada é normalmente a de login do Mac e deve ser preenchida apenas na janela do sistema. Negar não apaga as chaves.
 5. Autorize Microfone ao começar uma gravação e Acessibilidade para inserir texto em outros aplicativos. Não é necessário capturar a tela.
-6. Marque “Abrir ao entrar no Mac” e salve. O macOS pode pedir aprovação em Geral → Itens de Início. Fechar a janela mantém o aplicativo na barra de menus; “Encerrar FalaMac” para o processo até você abrir de novo ou entrar novamente no Mac.
+6. Marque “Abrir ao entrar no Mac” e salve. O macOS pode pedir aprovação em Geral → Itens de Início. Fechar a janela mantém o aplicativo rodando, com o ícone na barra de menus e presença no Dock e no alternador Command + Tab. Clique no Dock para reabrir a janela. “Encerrar FalaMac” para o processo até você abrir de novo ou entrar novamente no Mac.
 
 ## Usar
 
@@ -30,12 +30,14 @@ Para uso diário, copie o aplicativo para uma localização estável, como `/App
 - Para impedir que Fn também alterne o idioma do teclado, use Configuração → Tecla Fn do Mac e escolha **Do Nothing** em **Press 🌐 key to**. A mudança é uma preferência do macOS e continua valendo ao encerrar o FalaMac. Para alternar layouts, use **Control + Espaço** ou o menu de Entrada na barra superior.
 - Até 5 minutos por gravação. Indicador visível durante captura e processamento. Silêncio e gravações muito curtas são descartados antes do envio.
 - A barra de gravação usa fundo escuro translúcido e tem **Cancelar · Esc**. O botão e a tecla **Esc** descartam a captura antes do envio. Esc só é reservado pelo FalaMac enquanto prepara ou grava; fora disso, permanece com a função normal nos outros apps. Depois que o áudio foi enviado para processamento, a barra mostra o andamento e não oferece cancelamento da requisição já iniciada.
-- Se o foco mudar para outro aplicativo ou campo durante o processamento, o FalaMac abre o resultado para você copiar. Campos protegidos são excluídos. Alguns aplicativos não aceitam inserção por acessibilidade; confira sempre o resultado.
+- **Pausar música ao gravar** envia uma ordem dedicada de pausa para a sessão de mídia do macOS imediatamente antes da captura. Não alterna Play/Pause e não inicia uma música já pausada. Nesta versão, a retomada é manual pelo player; a opção pode ser desligada em Configuração. Usa o comando de mídia MediaRemote do sistema, sem baixar ferramentas, sem consultar faixas e sem contornar restrições de leitura de Now Playing. É uma API privada, portanto a compatibilidade depende do macOS e do player; uma falha não impede gravar.
+- Você pode começar a falar num campo, clicar em outro campo ou aplicativo e terminar a gravação. O FalaMac procura o campo selecionado no momento de entregar o resultado, após o processamento. A janela principal pode ficar fechada. Se não houver campo editável, mantém o resultado para copiar sem abrir a janela. Campos protegidos são excluídos. Alguns aplicativos não aceitam inserção por acessibilidade; confira sempre o resultado.
 - A inserção usa Acessibilidade para reconhecer o campo e envia um comando de colar após soltar os modificadores do atalho. Isso mantém os eventos de edição esperados por campos em React e Electron. Restaura o conteúdo anterior da área de transferência após um segundo, desde que você não tenha copiado algo novo. O aplicativo de destino não confirma que recebeu o comando de colar.
 - Configuração mostra se a inserção está autorizada pelo macOS. O botão **Testar inserção** dá cinco segundos para clicar num campo de outro app e insere uma frase de teste, sem áudio nem uso das APIs. Se faltar permissão, não encontrar campo ou o foco mudar, informa o motivo.
 - Se a organização falhar, preserva a transcrição original para revisão e cópia. Sem chave OpenRouter, funciona apenas como transcritor.
 - Ao concluir uma gravação, não abre nem ativa a janela. Se não houver campo disponível, deixa o texto no histórico e mostra um aviso breve sem tomar o foco. Use **Copiar último texto** no menu do ícone para copiar sem abrir a janela. Se houver erro, o motivo também fica no texto de ajuda do ícone e no topo da janela, quando você abri-la.
 - O editor mantém perguntas e prompts como texto; não tenta responder a eles nem inventar informações.
+- A organização prioriza tópicos para falas com várias ideias, reúne assuntos relacionados e instrui o modelo a manter apenas a intenção final quando houver autocorreções. Preserva dúvidas reais, condições e detalhes úteis. O modelo continua sendo Gemini 2.5 Flash Lite; a qualidade deve ser avaliada com suas falas, pois as instruções não garantem acerto em toda ambiguidade.
 
 ## Espaço e privacidade
 

@@ -15,6 +15,14 @@ struct InsertionTarget {
         case ownWindow = "A gravação começou na janela do FalaMac. Selecione o campo de outro app antes de gravar."
     }
 
+    /// Always resolve the field at delivery time. Never keep a recording-start
+    /// target: moving to another input while dictating is intentional.
+    static func deliver(_ text: String) async -> (Bool, CaptureFailure?) {
+        let (field, failure) = await prepare()
+        guard let field else { return (false, failure) }
+        return (await field.insert(text), nil)
+    }
+
     static func prepare() async -> (InsertionTarget?, CaptureFailure?) {
         guard AXIsProcessTrusted() else { return (nil, .permission) }
         guard let app = NSWorkspace.shared.frontmostApplication,
