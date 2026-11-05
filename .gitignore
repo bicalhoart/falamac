@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+*.xcuserstate
+.env
+.env.*
+*.m4a
+*.wav
+history.json
+usage.json
+*.app/
