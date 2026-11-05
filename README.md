@@ -1,77 +1,85 @@
 # FalaMac
 
-Aplicativo pessoal para macOS 13 ou superior. Grava pelo atalho, transcreve com Groq, organiza o texto com OpenRouter e tenta inserir no campo selecionado no momento da entrega. Sem servidor, telemetria, modelos locais ou dependências externas de compilação.
+A lightweight macOS dictation app: speak, let AI clean up your words, and paste the result into the active text field.
 
-## Interface
+**Early testing version.** Built for personal use and now shared for others to try. Auto-paste can be inconsistent in some apps; the floating bar always offers **Copy text** after processing.
 
-A interface está em inglês: **History**, **Settings** e **Usage**. Settings mostra preferências e conexões; **Edit API keys…** e **More options…** revelam as opções menos usadas. **Help** reúne instruções. Usage separa a estimativa local do consumo informado pelo OpenRouter. A tradução da interface não altera o idioma dos textos ditados.
+## Download
 
-## Compilar e abrir
+[Download the test build](https://github.com/bicalhoart/falamac/releases/tag/v0.3.0) → choose **FalaMac-0.3.0-arm64.zip** under Assets.
 
-Requer Command Line Tools da Apple, com Swift 6 ou posterior. Não precisa do Xcode completo.
+- The prebuilt app is for **Apple Silicon Macs (M1 or later), macOS 13 or newer**.
+- Unzip it and move **FalaMac.app** to **Applications** before opening it.
+- This personal build is ad-hoc signed, **not Developer ID signed or notarized by Apple**. macOS may block the download from opening. Review [Apple's guidance on opening downloaded apps](https://support.apple.com/en-us/102445) before deciding whether to run it. You can also build from the source below.
+- No subscription or account with FalaMac is required. You need your own API accounts and keys; any API charges belong to those providers.
+
+## Set up
+
+1. Get your own [Groq API key](https://console.groq.com/keys) for speech transcription. This is **Groq**, not xAI's Grok.
+2. Get your own [OpenRouter API key](https://openrouter.ai/settings/keys) for text cleanup. Set a spending limit on that key and check your account balance.
+3. Open FalaMac → **Settings → Edit API keys…**, enter both keys, and click **Save keys**. Keys are stored in your Mac's Keychain. Do not paste keys into GitHub issues or screenshots.
+4. Allow **Microphone** access when recording, and use **Allow Accessibility** so FalaMac can detect the active field and paste into other apps.
+5. Choose a shortcut and click **Save changes**. **Control + Option + Space** works as a toggle. Fn can either toggle or work as push-to-talk.
+6. If using Fn, open **Settings → More options… → Keyboard settings** and set **Press 🌐 key to → Do Nothing** in macOS. Use **Control + Space** or the input menu to switch keyboard languages.
+
+After an update, macOS may require Accessibility approval again. **Unlock saved keys** requests access to existing Keychain entries; enter your Mac login password only in the system prompt. Denying access does not delete the keys.
+
+## Use
+
+- Press your shortcut to record, then press it again to finish (or release Fn in hold mode).
+- You can move to a different field or app while speaking. FalaMac uses the field selected when the finished text is delivered.
+- The floating bar shows recording and processing. **Cancel · Esc** cancels an active recording before upload.
+- After processing, use **Copy text** if auto-paste does not appear. Press **⌘V** in your chosen field. **Close** dismisses the bar.
+- Text cleanup preserves your spoken language, favors bullet points for multiple ideas, and keeps the final version of spoken self-corrections. Model output still needs review.
+- If cleanup fails, the original transcript is marked **Not cleaned up**, with **Retry cleanup** available for the latest result in the session. Retrying sends only that text to OpenRouter.
+- Closing the main window keeps FalaMac running in the menu bar. **Quit FalaMac** stops it. Turn off **Launch at login** in Settings if you do not want it to start with your Mac.
+- **Pause music while recording** sends a pause command to the current macOS media session. Resume playback manually in your player.
+
+## Screens
+
+- **History:** search and copy recent dictations.
+- **Settings:** shortcuts, retention, startup, API connections, and paste testing. **Help** contains usage instructions.
+- **Usage:** a local monthly estimate and usage reported by your OpenRouter key. Key allowance is not account credit balance. Groq billing is checked on its own dashboard.
+
+**The local monthly limit is an estimate, not a provider billing guarantee.** Set spending limits with your providers too. OpenRouter usage covers all apps sharing that key and uses UTC day/month boundaries. Failed requests may retain a conservative local cost reservation.
+
+## Privacy and storage
+
+FalaMac is a local Mac app with **cloud AI processing**:
+
+- Audio goes to **Groq** (`whisper-large-v3-turbo`). The transcript and editing instructions go to **OpenRouter** and its selected provider (`google/gemini-2.5-flash-lite`). Provider privacy and retention policies apply.
+- It does not upload your history, existing clipboard, screen contents, or app names. It requests OpenRouter providers with data collection disabled; this does not make processing offline.
+- API keys stay in **macOS Keychain**. No keys, personal transcripts, usage records, or audio are bundled with the app or source.
+- Audio is capped at **5 minutes** per recording (about 1.2 MB), then deleted locally after success, failure, or cancellation. Leftover audio from interrupted sessions is cleaned up on the next launch.
+- History is plain text in `~/Library/Application Support/FalaMac/`, with owner-only permissions. Retention is off, 1, 7, or 30 days, with a 10 MB / 3,000-entry cap. Cleanup runs at launch and hourly while open. Mac backups may retain older copies.
+- Auto-paste temporarily uses the clipboard, restoring its prior contents after three seconds unless something else was copied. Explicit **Copy text** leaves the result on the clipboard. Clipboard managers may see it.
+- No local AI models, server, or app analytics are installed.
+
+## Current limitations
+
+- Tested on one Apple Silicon Mac. Other macOS versions, keyboard layouts, players, and editors still need testing.
+- Auto-paste is best effort. Dispatching a paste shortcut does not confirm that the destination accepted it. Protected fields are excluded.
+- Music pause uses a private macOS MediaRemote command and may stop working with a system/player update. Failure does not prevent dictation.
+- Transcription and cleanup can make mistakes. Review output before using it.
+
+## Build from source
+
+Requires Apple's Command Line Tools with Swift 6 or newer. Full Xcode is not required. The build uses the host Mac's architecture; an Intel build has not been validated.
 
 ```sh
+git clone https://github.com/bicalhoart/falamac.git
+cd falamac
 bash scripts/build.sh
-open dist/FalaMac.app
 ```
 
-Para uso diário, copie o aplicativo para uma localização estável, como `/Applications/FalaMac.app`, antes de autorizar Microfone, Acessibilidade e início automático. O build pessoal usa assinatura ad hoc, sem assinatura paga de desenvolvedor. Atualizações podem exigir nova autorização do macOS.
-
-## Configurar
-
-1. Abra o ícone de onda na barra de menus → Open FalaMac → Settings.
-2. Crie sua conta e chave em [Groq](https://console.groq.com/keys). É possível testar a camada gratuita dentro das cotas disponíveis; confira as condições na própria conta.
-3. Crie uma chave em [OpenRouter](https://openrouter.ai/settings/keys). Configure um limite exclusivo para essa chave e mantenha recarga automática desativada se quiser controlar o saldo manualmente. Configure o limite Groq separadamente se usar plano pago.
-4. Cole as chaves nos campos protegidos do aplicativo e salve. Elas ficam no Chaves do macOS. Não coloque chaves no código, no GitHub ou no chat.
-   Atualizações da versão pessoal podem pedir novamente acesso às chaves. O aplicativo não mostra esse pedido automaticamente ao abrir: use **Unlock saved keys**. A senha solicitada é normalmente a de login do Mac e deve ser preenchida apenas na janela do sistema. Negar não apaga as chaves.
-5. Autorize Microfone ao começar uma gravação e Acessibilidade para inserir texto em outros aplicativos. Não é necessário capturar a tela.
-6. Marque “Launch at login” e salve. O macOS pode pedir aprovação em Geral → Itens de Início. Fechar a janela mantém o aplicativo rodando, com o ícone na barra de menus e presença no Dock e no alternador Command + Tab. Clique no Dock para reabrir a janela. “Quit FalaMac” para o processo até você abrir de novo ou entrar novamente no Mac.
-
-## Usar
-
-- `Control + Option + Espaço`: aperte para começar e aperte novamente para terminar.
-- Fn é opcional: segurar para falar ou alternar a cada toque. Desative o atalho Fn no Typeless e a ação padrão da tecla Globo no macOS antes de usar. A detecção de Fn precisa ser validada no teclado real; o atalho alternativo continua disponível.
-- Para impedir que Fn também alterne o idioma do teclado, use Settings → Keyboard settings e escolha **Do Nothing** em **Press 🌐 key to**. A mudança é uma preferência do macOS e continua valendo ao encerrar o FalaMac. Para alternar layouts, use **Control + Espaço** ou o menu de Entrada na barra superior.
-- Até 5 minutos por gravação. Indicador visível durante captura e processamento. Silêncio e gravações muito curtas são descartados antes do envio.
-- A barra de gravação usa fundo escuro translúcido e tem **Cancel · Esc**. O botão permanece fixo à direita, separado de um medidor de volume com largura fixa. O botão e a tecla **Esc** descartam a captura antes do envio. Esc só é reservado pelo FalaMac enquanto prepara ou grava; fora disso, permanece com a função normal nos outros apps. Depois que o áudio foi enviado para processamento, a barra mostra o andamento e não oferece cancelamento da requisição já iniciada.
-- **Pause music while recording** envia uma ordem dedicada de pausa para a sessão de mídia do macOS imediatamente antes da captura. Não alterna Play/Pause e não inicia uma música já pausada. Nesta versão, a retomada é manual pelo player; a opção pode ser desligada em Settings. Usa o comando de mídia MediaRemote do sistema, sem baixar ferramentas, sem consultar faixas e sem contornar restrições de leitura de Now Playing. É uma API privada, portanto a compatibilidade depende do macOS e do player; uma falha não impede gravar.
-- Você pode começar a falar num campo, clicar em outro campo ou aplicativo e terminar a gravação. O FalaMac procura o campo selecionado no momento de entregar o resultado, após o processamento. A janela principal pode ficar fechada. Se não houver campo editável, mantém o resultado para copiar sem abrir a janela. Campos protegidos são excluídos. Alguns aplicativos não aceitam inserção por acessibilidade; confira sempre o resultado.
-- A inserção usa Acessibilidade para reconhecer o campo e envia um comando de colar após soltar os modificadores do atalho. Isso mantém os eventos de edição esperados por campos em React e Electron. Restaura o conteúdo anterior da área de transferência após três segundos, desde que você não tenha copiado algo novo. O aplicativo de destino não confirma que recebeu o comando de colar.
-- Settings mostra se a inserção está autorizada pelo macOS. O botão **Test paste** dá cinco segundos para clicar num campo de outro app e insere uma frase de teste, sem áudio nem uso das APIs. Se faltar permissão, não encontrar campo ou o foco mudar, informa o motivo. O resultado do teste também oferece **Copy text** na barrinha.
-- Se a organização falhar, preserva a transcrição original, marca **Not cleaned up** na barrinha e no histórico, e oferece **Retry cleanup**. A nova tentativa usa somente o texto no OpenRouter e respeita o teto local, sem gravar ou transcrever áudio novamente. Quando funciona, atualiza a mesma entrada do histórico, preservando a data original. A nova tentativa oferece cópia manual. Sem chave OpenRouter, funciona apenas como transcritor e informa que falta organizar. Falhas de persistência ou estimativa local não impedem entregar um texto já organizado.
-- Ao concluir uma gravação, não abre nem ativa a janela. A barrinha permanece com **Copy text** e **Close**, mesmo depois de enviar a colagem, pois alguns aplicativos não confirmam o recebimento. O botão copia o resultado mais recente para a área de transferência; use **⌘V** no campo desejado. Permanece até fechar ou iniciar outra gravação. Se não houver campo disponível, o resultado organizado continua disponível ali e no histórico. **Copy latest text** também permanece no menu do ícone. Se houver erro, o motivo também fica no texto de ajuda do ícone e no topo da janela, quando você abri-la.
-- O editor mantém perguntas e prompts como texto; não tenta responder a eles nem inventar informações.
-- A organização prioriza tópicos para falas com várias ideias, reúne assuntos relacionados e instrui o modelo a manter apenas a intenção final quando houver autocorreções. Preserva dúvidas reais, condições e detalhes úteis. O modelo continua sendo Gemini 2.5 Flash Lite; a qualidade deve ser avaliada com suas falas, pois as instruções não garantem acerto em toda ambiguidade.
-
-## Espaço e privacidade
-
-- Histórico em `~/Library/Application Support/FalaMac/history.json`, limitado a **30 dias, 10 MB ou 3.000 textos**, o que ocorrer primeiro. A busca cobre todo o histórico; a lista mostra até 200 resultados.
-- Opções de retenção: nenhum histórico, 1, 7 ou 30 dias. Sem histórico, o último resultado permanece apenas na memória da sessão até ser substituído, descartado ou encerrado o app.
-- Limpeza ao abrir e a cada hora enquanto o app está aberto. Se o Mac estiver desligado, a limpeza acontece na próxima abertura. O prazo pode ter até uma hora de tolerância enquanto aberto.
-- Áudio AAC mono 16 kHz a 32 kbps: aproximadamente **1,2 MB em 5 minutos**, temporário. Apagado após sucesso ou erro; arquivos deixados por queda de energia ou encerramento forçado são removidos na próxima abertura. Não existe fila de áudios nem backup automático de transcrições.
-- Chaves ficam no Chaves do macOS, sem sincronização solicitada pelo aplicativo. Histórico local é texto simples em pasta acessível só ao usuário; não é criptografado pelo aplicativo. Time Machine e outros backups do Mac podem preservar cópias conforme sua configuração.
-- Apenas o áudio é enviado à Groq; apenas a transcrição atual e as instruções de edição são enviadas ao OpenRouter e seu fornecedor. Não envia histórico, área de transferência, conteúdo da tela ou nomes de aplicativos. O OpenRouter é solicitado a usar fornecedores com coleta de dados desativada; políticas e retenção dos serviços continuam sendo responsabilidade deles.
-- O uso temporário da área de transferência durante a inserção pode ser visto por gerenciadores de clipboard instalados no Mac.
-
-## Usage
-
-A aba **Usage**, também acessível por **Usage** no menu do ícone, consulta `GET https://openrouter.ai/api/v1/key` com a chave já cadastrada. Mostra o consumo informado pelo OpenRouter para o dia, mês e total, além do teto da chave e do restante nesse teto quando disponíveis. As consultas são somente de leitura, sem enviar áudio, transcrições ou histórico. Os dados consultados ficam apenas na memória, com data de atualização, e não são gravados no Git ou em arquivos de histórico. Consulta ao abrir a aba (com intervalo mínimo de um minuto), ou ao clicar em Refresh.
-
-O consumo da API cobre todos os usos desta chave, inclusive em outros apps, e segue janelas UTC. Não é somado novamente à estimativa local. O restante do teto da chave não é o saldo da conta. A consulta do saldo total exige chave administrativa, que esta versão não solicita; há um botão para abrir o saldo no site do OpenRouter. Para a Groq, usa a estimativa local e oferece acesso ao painel oficial, pois não foi encontrada consulta pública de cobrança com a chave de inferência comum. Valores exibidos em US$; o plano gratuito Groq pode não gerar cobrança, mesmo quando existe estimativa de custo equivalente.
-
-O painel mostra uma estimativa mensal e impede novas gravações perto do teto escolhido, inicialmente US$ 5. A transcrição considera mínimo de 10 segundos a US$ 0,04/h. Para organização, usa `google/gemini-2.5-flash-lite` e o custo informado pelo OpenRouter, ou uma estimativa por tokens quando o custo não estiver disponível. Falhas podem manter uma reserva conservadora de US$ 0,01 para a organização.
-
-**Esse controle local não substitui os limites de cobrança dos fornecedores.** Tarifas, taxas, impostos, uso por outras ferramentas e falhas de rede podem causar divergências. O modelo é fixo nesta versão para manter a estimativa coerente. O resumo mensal guarda apenas contagens e valores, independentemente da limpeza do histórico.
-
-Referências verificadas no início do projeto: [Groq Speech-to-Text](https://console.groq.com/docs/speech-to-text), [modelo OpenRouter](https://openrouter.ai/google/gemini-2.5-flash-lite), [limites OpenRouter](https://openrouter.ai/docs/api/reference/limits), [início automático no macOS](https://developer.apple.com/documentation/servicemanagement/smappservice).
-
-## Desenvolvimento e verificação
+Copy `dist/FalaMac.app` to Applications before granting permissions. Builds remove debug symbols and remap source paths so shared binaries do not expose the builder's home directory.
 
 ```sh
 bash scripts/test.sh
-bash scripts/build.sh
 ```
 
-Os testes cobrem expiração e limite de espaço, estrutura das requisições, resposta incompleta e consumo. O teste completo de gravação, qualidade em português/inglês, Fn, inserção em diferentes apps e reinício do Mac exige permissões e contas configuradas no computador real.
+Tests cover retention, storage, request structure, incomplete AI responses, field metadata, and usage accounting. Recording, permissions, model quality, and cross-app paste require testing on a real Mac.
 
-Para liberar espaço após compilar, remova somente `.build/` e `dist/` deste projeto quando já tiver uma cópia instalada do aplicativo. A compilação seguinte recria esses arquivos. Não remova caches globais do Swift ou arquivos de outros projetos.
+After keeping a copy of the app, `.build/` and `dist/` can be removed to reclaim compilation space. Only remove these directories inside this repository.
+
+[Documentação detalhada em português](README.pt-BR.md)
